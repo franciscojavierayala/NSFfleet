@@ -1,0 +1,28 @@
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Modelo entrenado (demasiado grande para GitHub)
+checkpoints/best_model.pt
+
+# Outputs generados
+outputs/*.png
+outputs/demo_results_synthetic.png
+
+# Streamlit
+.streamlit/
+
+# VS Code
+.vscode/
+
+# Sistema
+.DS_Store
+Thumbs.db

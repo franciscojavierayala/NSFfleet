@@ -1,0 +1,9 @@
+{
+  "data_mode": "synthetic",
+  "epochs": 100,
+  "warmup_epochs": 25,
+  "n_train": 3200,
+  "n_val": 800,
+  "best_val_recon": 0.03296526048619013,
+  "best_val_loss": 0.08342281442422134
+}
