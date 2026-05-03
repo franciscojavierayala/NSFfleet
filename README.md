@@ -157,6 +157,7 @@ NSFfleet/
 - [ ] Cost estimation in euros
 - [ ] Real-time anomaly alerts (actual trip vs P95 prediction)
 - [ ] Snow / ice driving conditions
+- [ ] Environment isolation via Docker
 
 ---
 
