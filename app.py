@@ -8,7 +8,10 @@ Ejecutar con:
 """
 
 import sys
+import math
 from pathlib import Path
+from datetime import date, timedelta
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
@@ -26,6 +29,7 @@ from streamlit_searchbox import st_searchbox
 from model.nflow_model import ConditionalFlowModel
 from inference.predictor import FleetPredictor
 from route.route_builder import build_route_context
+from data.synthetic import MINS, MAXS  # FIX: usar rangos reales en lugar de hardcode
 
 
 # ── Lista de ciudades frecuentes para fallback rápido ────────────────────────
@@ -44,17 +48,28 @@ CITIES_FALLBACK = [
 ]
 
 
+# ── Cálculo de componente frontal del viento ──────────────────────────────────
+def frontal_wind(wind_speed: float, wind_dir: float, route_bearing: float) -> float:
+    """
+    Devuelve la componente frontal del viento (km/h).
+    Positivo = viento de frente (penaliza consumo).
+    Negativo = viento de cola (ayuda).
+    """
+    angle_diff = math.radians(abs(route_bearing - wind_dir) % 360)
+    if angle_diff > math.pi:
+        angle_diff = 2 * math.pi - angle_diff
+    return wind_speed * math.cos(angle_diff)
+
+
 # ── Autocompletado de ciudades con Nominatim ─────────────────────────────────
 def search_cities(query: str) -> list[str]:
     """Devuelve sugerencias de ciudades mientras el usuario escribe."""
     if not query or len(query) < 2:
         return []
 
-    # Filtro rápido local primero (instantáneo)
     q_lower = query.lower()
     local_matches = [c for c in CITIES_FALLBACK if q_lower in c.lower()]
 
-    # Luego intenta Nominatim para resultados más completos
     try:
         resp = _requests.get(
             "https://nominatim.openstreetmap.org/search",
@@ -65,7 +80,7 @@ def search_cities(query: str) -> list[str]:
                 "addressdetails": 1,
                 "accept-language": "es",
             },
-            headers={"User-Agent": "cvae_fleet_demo/1.0"},
+            headers={"User-Agent": "nsffleet_demo/1.0"},  # FIX: nombre actualizado
             timeout=4,
         )
         results = resp.json()
@@ -132,7 +147,6 @@ with st.sidebar:
         format_func=lambda x: VEHICLE_NAMES[x],
     )
     load_pct = st.slider("Carga (%)", 0, 100, 75) / 100.0
-    from datetime import date, timedelta
     departure_date = st.date_input(
         "Fecha de salida",
         value=date.today() + timedelta(days=1),
@@ -198,7 +212,6 @@ with col_btn:
 # ── Ejecución ──────────────────────────────────────────────────────────────────
 if predict_btn and origin and destination:
 
-    # Limpiar estado anterior
     st.session_state.pop("result", None)
     st.session_state.pop("context", None)
 
@@ -224,22 +237,16 @@ if predict_btn and origin and destination:
         weather_date = context["weather"].get("date_used", "hoy")
         st.write(f"🌡️ Temperatura: {context['weather']['temperature']:.1f} °C  _(fecha: {weather_date})_")
         st.write(f"🌧️ Precipitación: {context['weather']['precipitation']:.1f} mm/h")
-        wind_speed = context["weather"].get("wind_speed", 0.0)
-        wind_dir   = context["weather"].get("wind_direction", 0.0)
-        route_bearing = context.get("route_bearing", 0.0)
 
-        # Componente frontal real: cos(ángulo entre viento y dirección de marcha)
-        # Si el viento viene exactamente de frente → cos(0°)=1.0 → máxima penalización
-        # Si viene de atrás → cos(180°)=-1.0 → ayuda (reduce consumo)
-        import math
-        angle_diff = math.radians(abs(route_bearing - wind_dir) % 360)
-        if angle_diff > math.pi:
-            angle_diff = 2 * math.pi - angle_diff
-        wind_frontal = wind_speed * math.cos(angle_diff)
+        wind_speed    = context["weather"].get("wind_speed", 0.0)
+        wind_dir      = context["weather"].get("wind_direction", 0.0)
+        route_bearing = context.get("route_bearing", 0.0)
+        wind_frontal  = frontal_wind(wind_speed, wind_dir, route_bearing)  # FIX: función reutilizable
 
         st.write(f"💨 Viento: {wind_speed:.1f} km/h  _(dirección: {wind_dir:.0f}°, componente frontal: {wind_frontal:+.1f} km/h)_")
 
-        st.write(f"🤖 Generando {n_samples} viajes sintéticos con el cVAE...")
+        # FIX: "cVAE" → "NSF"
+        st.write(f"🤖 Generando {n_samples} viajes sintéticos con el NSF...")
         predictor = FleetPredictor(model)
         result = predictor.predict_route(
             avg_slope=context["avg_slope"],
@@ -266,11 +273,11 @@ if "result" in st.session_state and "context" in st.session_state:
 
     # ── Métricas rápidas ───────────────────────────────────────────────────────
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("📏 Distancia",        f"{ri['distance_km']:.0f} km")
-    m2.metric("⏱️ Duración",          f"{ri['duration_min']:.0f} min")
-    m3.metric("⛽ Consumo P50",       f"{s['consumo_medio_l100km']['p50']:.1f} l/100km")
-    m4.metric("🚀 Velocidad P50",     f"{s['velocidad_media_kmh']['p50']:.1f} km/h")
-    m5.metric("💨 Viento",            f"{context['weather'].get('wind_speed', 0.0):.1f} km/h")
+    m1.metric("📏 Distancia",    f"{ri['distance_km']:.0f} km")
+    m2.metric("⏱️ Duración",      f"{ri['duration_min']:.0f} min")
+    m3.metric("⛽ Consumo P50",   f"{s['consumo_medio_l100km']['p50']:.1f} l/100km")
+    m4.metric("🚀 Velocidad P50", f"{s['velocidad_media_kmh']['p50']:.1f} km/h")
+    m5.metric("💨 Viento",        f"{context['weather'].get('wind_speed', 0.0):.1f} km/h")
 
     st.divider()
 
@@ -283,16 +290,14 @@ if "result" in st.session_state and "context" in st.session_state:
         mid_pt   = polyline[len(polyline) // 2]
         n_segs   = len(result["segments"])
 
-        # Colores por tramo
         SEG_COLORS = ["#E63946", "#F4A261", "#2A9D8F", "#457B9D", "#9B5DE5", "#F77F00"]
 
         m = folium.Map(location=mid_pt, zoom_start=7, tiles="CartoDB positron")
 
-        # Dividir polyline en N tramos y pintarlos con color distinto
         seg_size = max(1, len(polyline) // n_segs)
         for i in range(n_segs):
-            start_i = i * seg_size
-            end_i   = (i + 1) * seg_size if i < n_segs - 1 else len(polyline)
+            start_i  = i * seg_size
+            end_i    = (i + 1) * seg_size if i < n_segs - 1 else len(polyline)
             seg_pts  = polyline[start_i:end_i + 1]
             seg_data = result["segments"][i]
             color    = SEG_COLORS[i % len(SEG_COLORS)]
@@ -307,7 +312,6 @@ if "result" in st.session_state and "context" in st.session_state:
                 tooltip=folium.Tooltip(tooltip, sticky=True),
             ).add_to(m)
 
-            # Punto de inicio de cada tramo (excepto el origen)
             if i > 0:
                 folium.CircleMarker(
                     location=seg_pts[0],
@@ -315,7 +319,6 @@ if "result" in st.session_state and "context" in st.session_state:
                     tooltip=f"Inicio T{i+1}",
                 ).add_to(m)
 
-        # Marcadores origen / destino
         folium.Marker(
             polyline[0], tooltip=f"🟢 Origen: {origin}",
             icon=folium.Icon(color="green", icon="play", prefix="fa"),
@@ -327,7 +330,6 @@ if "result" in st.session_state and "context" in st.session_state:
 
         st_folium(m, width=560, height=400)
 
-        # Leyenda de colores de tramos
         legend_html = "".join(
             f'<span style="background:{SEG_COLORS[i]};padding:2px 10px;border-radius:4px;'
             f'margin-right:6px;color:white;font-size:12px">T{i+1}</span>'
@@ -364,16 +366,14 @@ if "result" in st.session_state and "context" in st.session_state:
         st.write(f"📦 Carga: **{load_pct*100:.0f}%**")
         st.write(f"📅 Fecha: **{departure_date.strftime('%d/%m/%Y')}** ({DAY_NAMES[day_of_week]})")
         st.write(f"🌡️ Temperatura: **{context['weather']['temperature']:.1f} °C**")
-        _wspd = context['weather'].get('wind_speed', 0.0)
-        _wdir = context['weather'].get('wind_direction', 0.0)
-        _bearing = context.get('route_bearing', 0.0)
-        import math as _math
-        _adiff = _math.radians(abs(_bearing - _wdir) % 360)
-        if _adiff > _math.pi: _adiff = 2*_math.pi - _adiff
-        _wfront = _wspd * _math.cos(_adiff)
-        _label = "frontal 🔴" if _wfront > 0 else "trasero 🟢"
-        st.write(f"💨 Viento: **{_wspd:.1f} km/h** dir {_wdir:.0f}° → componente {_label} **{abs(_wfront):.1f} km/h**")
 
+        # FIX: reutilizar frontal_wind() en lugar de duplicar la fórmula
+        _wspd    = context['weather'].get('wind_speed', 0.0)
+        _wdir    = context['weather'].get('wind_direction', 0.0)
+        _bearing = context.get('route_bearing', 0.0)
+        _wfront  = frontal_wind(_wspd, _wdir, _bearing)
+        _label   = "frontal 🔴" if _wfront > 0 else "trasero 🟢"
+        st.write(f"💨 Viento: **{_wspd:.1f} km/h** dir {_wdir:.0f}° → componente {_label} **{abs(_wfront):.1f} km/h**")
 
     # ── Gráficos ───────────────────────────────────────────────────────────────
     st.divider()
@@ -387,26 +387,24 @@ if "result" in st.session_state and "context" in st.session_state:
 
         fig, (ax_c, ax_v) = plt.subplots(1, 2, figsize=(7, 3.2))
 
-        # Consumo
         p50s_c = [seg["consumo"]["p50"] for seg in segs_sorted]
         p5s_c  = [seg["consumo"]["p5"]  for seg in segs_sorted]
         p95s_c = [seg["consumo"]["p95"] for seg in segs_sorted]
-        yerr_c = [[p50-p5 for p50,p5 in zip(p50s_c,p5s_c)],
-                  [p95-p50 for p95,p50 in zip(p95s_c,p50s_c)]]
+        yerr_c = [[p50-p5  for p50, p5  in zip(p50s_c, p5s_c)],
+                  [p95-p50 for p95, p50 in zip(p95s_c, p50s_c)]]
         ax_c.bar(tramos, p50s_c, color="#1F5C99", alpha=0.85,
-                 yerr=yerr_c, capsize=5, error_kw={"color":"#E07B39","linewidth":1.8})
+                 yerr=yerr_c, capsize=5, error_kw={"color": "#E07B39", "linewidth": 1.8})
         ax_c.set_title("Consumo P50 (IC 90%)", fontsize=10)
         ax_c.set_ylabel("l/100km")
         ax_c.grid(alpha=0.3, axis="y")
 
-        # Velocidad
         p50s_v = [seg["velocidad"]["p50"] for seg in segs_sorted]
         p5s_v  = [seg["velocidad"]["p5"]  for seg in segs_sorted]
         p95s_v = [seg["velocidad"]["p95"] for seg in segs_sorted]
-        yerr_v = [[p50-p5 for p50,p5 in zip(p50s_v,p5s_v)],
-                  [p95-p50 for p95,p50 in zip(p95s_v,p50s_v)]]
+        yerr_v = [[p50-p5  for p50, p5  in zip(p50s_v, p5s_v)],
+                  [p95-p50 for p95, p50 in zip(p95s_v, p50s_v)]]
         ax_v.bar(tramos, p50s_v, color="#2A9D8F", alpha=0.85,
-                 yerr=yerr_v, capsize=5, error_kw={"color":"#E07B39","linewidth":1.8})
+                 yerr=yerr_v, capsize=5, error_kw={"color": "#E07B39", "linewidth": 1.8})
         ax_v.set_title("Velocidad P50 (IC 90%)", fontsize=10)
         ax_v.set_ylabel("km/h")
         ax_v.grid(alpha=0.3, axis="y")
@@ -417,7 +415,11 @@ if "result" in st.session_state and "context" in st.session_state:
 
     with col_g2:
         fig2, ax2 = plt.subplots(figsize=(6, 3.2))
-        trips_v = (result["trips_raw"][:, :, 0] + 1) / 2 * 130
+
+        # FIX: usar MAXS/MINS importados de synthetic.py en lugar de hardcode 130
+        v_min, v_max = MINS[0], MAXS[0]
+        trips_v = (result["trips_raw"][:, :, 0] + 1) / 2 * (v_max - v_min) + v_min
+
         for i in range(min(5, len(trips_v))):
             ax2.plot(trips_v[i], alpha=0.25, linewidth=0.8)
         ax2.plot(np.percentile(trips_v, 50, axis=0),
@@ -444,19 +446,18 @@ if "result" in st.session_state and "context" in st.session_state:
     rows = []
     for seg in sorted(result["segments"], key=lambda x: x["tramo"]):
         rows.append({
-            "Tramo":          f"T{seg['tramo']}",
-            "Consumo P05":    f"{seg['consumo']['p5']:.1f}",
-            "Consumo P50 ←":  f"{seg['consumo']['p50']:.1f}",
-            "Consumo P95":    f"{seg['consumo']['p95']:.1f}",
-            "IC Consumo":     f"±{(seg['consumo']['p95']-seg['consumo']['p5'])/2:.1f}",
-            "Vel P05":        f"{seg['velocidad']['p5']:.1f}",
-            "Vel P50":        f"{seg['velocidad']['p50']:.1f}",
-            "Vel P95":        f"{seg['velocidad']['p95']:.1f}",
+            "Tramo":         f"T{seg['tramo']}",
+            "Consumo P05":   f"{seg['consumo']['p5']:.1f}",
+            "Consumo P50 ←": f"{seg['consumo']['p50']:.1f}",
+            "Consumo P95":   f"{seg['consumo']['p95']:.1f}",
+            "IC Consumo":    f"±{(seg['consumo']['p95']-seg['consumo']['p5'])/2:.1f}",
+            "Vel P05":       f"{seg['velocidad']['p5']:.1f}",
+            "Vel P50":       f"{seg['velocidad']['p50']:.1f}",
+            "Vel P95":       f"{seg['velocidad']['p95']:.1f}",
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 else:
-    # Estado inicial
     st.info(
         "👆 Introduce origen y destino en los campos de arriba y pulsa **Predecir** "
         "para obtener las métricas de la ruta."
