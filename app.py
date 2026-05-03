@@ -476,7 +476,7 @@ if "result" in st.session_state and "context" in st.session_state:
             np.percentile(trips_v, 95, axis=0),
             alpha=0.15, color="#1F5C99", label="IC 90%",
         )
-        ax2.set_title("Perfiles de velocidad sintéticos", fontsize=11)
+        ax2.set_title("Perfiles de velocidad", fontsize=11)
         ax2.set_xlabel("Tiempo (min)")
         ax2.set_ylabel("km/h")
         ax2.legend(fontsize=9)
