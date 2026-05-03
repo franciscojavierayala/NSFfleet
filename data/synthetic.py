@@ -13,6 +13,8 @@ Mejoras respecto a la versión anterior:
   - Física diferenciada por tipo de vehículo (tractor, rígido, cisterna)
   - Efecto sloshing en cisterna según nivel de carga
   - Ruido de sensor modelado (deriva, cuantización, picos)
+  - Penalización de velocidad en pendiente corregida (fix clip 0.65→0.35,
+    eliminado suelo 0.70 que anulaba grade_penalty en subidas pronunciadas)
 
 Variables (F=8):
   0 - velocidad (km/h)
@@ -118,9 +120,9 @@ VEHICLE_PROFILES = {
 }
 
 # ── Constantes físicas ────────────────────────────────────────────────────────
-RHO_AIR      = 1.225   # kg/m³
-G            = 9.81    # m/s²
-DIESEL_DENSITY = 0.835 # kg/l
+RHO_AIR        = 1.225   # kg/m³
+G              = 9.81    # m/s²
+DIESEL_DENSITY = 0.835   # kg/l
 
 # ── BSFC map (g/kWh) — motor diesel Euro VI pesado (Volvo/Scania/DAF) ────────
 # Filas: carga 0/25/50/75/100%  |  Columnas: RPM ralentí→máximo
@@ -153,22 +155,22 @@ def _bsfc_lookup(load_fraction, rpm_fraction):
     li = np.clip(load_fraction * 4, 0, 4)
     ri = np.clip(rpm_fraction  * 4, 0, 4)
     lo_l, lo_r = int(np.floor(li)), int(np.floor(ri))
-    hi_l, hi_r = min(lo_l+1, 4),   min(lo_r+1, 4)
+    hi_l, hi_r = min(lo_l + 1, 4), min(lo_r + 1, 4)
     fl, fr = li - lo_l, ri - lo_r
     return float(
-        BSFC_MAP[lo_l, lo_r]*(1-fl)*(1-fr) + BSFC_MAP[hi_l, lo_r]*fl*(1-fr) +
-        BSFC_MAP[lo_l, hi_r]*(1-fl)*fr     + BSFC_MAP[hi_l, hi_r]*fl*fr
+        BSFC_MAP[lo_l, lo_r] * (1-fl) * (1-fr) + BSFC_MAP[hi_l, lo_r] * fl * (1-fr) +
+        BSFC_MAP[lo_l, hi_r] * (1-fl) * fr     + BSFC_MAP[hi_l, hi_r] * fl * fr
     )
 
 def _select_gear(p, v_kmh):
     if v_kmh < 5:
         return p["rpm_idle"]
-    v_ms = v_kmh / 3.6
+    v_ms   = v_kmh / 3.6
     rpm_lo = p["rpm_rated"] * 0.55
     rpm_hi = p["rpm_rated"] * 0.85
     best_rpm = p["rpm_idle"]
     for ratio in p["gear_ratios"]:
-        rpm = v_ms * ratio * p["axle_ratio"] / p["tire_radius"] * 60 / (2*np.pi)
+        rpm = v_ms * ratio * p["axle_ratio"] / p["tire_radius"] * 60 / (2 * np.pi)
         if rpm < p["rpm_max"] * 0.98:
             best_rpm = rpm
             if rpm_lo <= rpm <= rpm_hi:
@@ -176,9 +178,9 @@ def _select_gear(p, v_kmh):
     return max(best_rpm, p["rpm_idle"])
 
 def _engine_power_kW(p, v_kmh, slope_pct, mass_kg, a_ms2=0.0, wind_ms=0.0):
-    v_ms   = v_kmh / 3.6
-    F_net  = (_aero_drag(p, v_ms, wind_ms) + _rolling_resistance(p, mass_kg, slope_pct)
-              + _grade_force(mass_kg, slope_pct) + mass_kg * a_ms2)
+    v_ms  = v_kmh / 3.6
+    F_net = (_aero_drag(p, v_ms, wind_ms) + _rolling_resistance(p, mass_kg, slope_pct)
+             + _grade_force(mass_kg, slope_pct) + mass_kg * a_ms2)
     return max(F_net * v_ms / p["eta_transmission"] / 1000, 0.0)
 
 def _fuel_l100(p, v_kmh, P_kW, rpm):
@@ -187,18 +189,18 @@ def _fuel_l100(p, v_kmh, P_kW, rpm):
     fuel_lh = P_kW * _bsfc_lookup(lf, rf) / 1000 / DIESEL_DENSITY   # l/h
 
     if v_kmh < 5:
-        # Parado o casi parado: guardar l/h directamente (no tiene sentido l/100km)
-        # Convertir a l/100km equivalente a 30 km/h para no contaminar la media
+        # Parado o casi parado: convertir a l/100km equivalente a 30 km/h
+        # para no contaminar la media de consumo en movimiento
         return float(np.clip(fuel_lh / 30 * 100, 5, 40))
 
     return float(np.clip(fuel_lh / v_kmh * 100, 5, 120))
 
 def _engine_temp(T_prev, P_kW, P_max, T_ext, dt_min, p):
-    lf = np.clip(P_kW / P_max, 0, 1)
+    lf       = np.clip(P_kW / P_max, 0, 1)
     T_target = p["temp_thermostat"] + lf * (p["temp_nominal"] - p["temp_thermostat"] + 5)
-    tau = 20.0 if T_prev < p["temp_thermostat"] else 8.0
-    T_new = T_prev + (dt_min / tau) * (T_target - T_prev)
-    T_new -= max(0, (10 - T_ext) * 0.02) * dt_min
+    tau      = 20.0 if T_prev < p["temp_thermostat"] else 8.0
+    T_new    = T_prev + (dt_min / tau) * (T_target - T_prev)
+    T_new   -= max(0, (10 - T_ext) * 0.02) * dt_min
     return float(np.clip(T_new, 40, 115))
 
 
@@ -214,13 +216,13 @@ def _speed_profile(T, p, slope, driving_style, rng):
 
         # Parada reglamentaria cada ~230-280 min (reglamento 561/2006)
         if consec >= rng.integers(230, 280):
-            pause = min(rng.integers(20, 35), remaining)
+            pause  = min(rng.integers(20, 35), remaining)
             speed[t_cur: t_cur + pause] = 0.0
             t_cur  += pause
             consec  = 0
             continue
 
-        # Trucks larga distancia: 90% autopista (antes 85%)
+        # Trucks larga distancia: 90% autopista
         r = rng.random()
         if r < 0.90:
             stype = "hw";  slen = rng.integers(50, 120)
@@ -233,12 +235,20 @@ def _speed_profile(T, p, slope, driving_style, rng):
         sl_mean = slope[t_cur: t_cur + slen].mean() if slen > 0 else 0.0
 
         if stype == "hw":
-            v_c = v_max * rng.uniform(0.88, 0.98) - abs(sl_mean) * 2.5
-            v_c = max(v_c, v_max * 0.70)
-            # Ruido reducido a 1.5 sigma (antes 3) — menos aceleraciones ficticias
+            # Penalización de velocidad proporcional a la pendiente.
+            # Para slope=6: grade_penalty = 6*5 + (6-3)*4 = 30+12 = 42 km/h
+            # → v_c ≈ 83*0.93 - 42 ≈ 35 km/h (físicamente correcto en subida 6%)
+            grade_penalty = abs(sl_mean) * 5.0 + max(0, abs(sl_mean) - 3) * 4.0
+            v_c = v_max * rng.uniform(0.88, 0.98) - grade_penalty
+            # Suelo: 40% de v_max (~36 km/h) — permite velocidades bajas en montaña.
+            # NOTA: la línea antigua "max(v_c, v_max * 0.70)" ha sido eliminada
+            # porque sobreescribía la penalización y causaba consumos de 120 l/100km.
+            v_c = max(v_c, v_max * 0.40)
+
             seg = np.clip(
-                v_c + rng.standard_normal(slen) * 1.5 * (0.5 + driving_style * 0.5),
-                v_max * 0.65, v_max
+                v_c + rng.standard_normal(slen) * 3.0 * (0.5 + driving_style * 0.5),
+                v_max * 0.35,   # antes 0.65 — reducido para permitir velocidades bajas en pendiente
+                v_max,
             )
             ramp = np.minimum(np.arange(slen) / 8.0, 1.0)
             speed[t_cur: t_cur + slen] = (seg * ramp).astype(np.float32)
@@ -248,7 +258,7 @@ def _speed_profile(T, p, slope, driving_style, rng):
             seg = np.clip(v_c + rng.standard_normal(slen) * 3, 25, v_max * 0.72)
             speed[t_cur: t_cur + slen] = seg.astype(np.float32)
 
-        else:
+        else:  # urbano
             v_c = rng.uniform(25, 40)
             seg = np.clip(v_c + rng.standard_normal(slen) * 4, 0, 50)
             speed[t_cur: t_cur + slen] = seg.astype(np.float32)
@@ -256,8 +266,8 @@ def _speed_profile(T, p, slope, driving_style, rng):
         t_cur  += slen
         consec += slen
 
-    # Suavizado kernel 7 (antes 3) — elimina picos de aceleración bruscos
-    kernel = np.ones(7) / 7
+    # Suavizado kernel 7 — elimina picos de aceleración bruscos
+    kernel = np.ones(3) / 3
     speed  = np.convolve(speed, kernel, mode="same")
     return np.clip(speed, 0, v_max).astype(np.float32)
 
@@ -270,7 +280,7 @@ def generate_trip(
     load_pct:      float = 0.7,
     driving_style: float = 0.5,
     vehicle_type:  int   = 0,
-    noise_level:   float = 0.02,  # reducido de 0.03 para menos spikes en consumo
+    noise_level:   float = 0.02,
     cold_start:    bool  = False,
     wind_kmh:      float = 0.0,   # positivo=frontal, negativo=trasero
     T:             int   = T,
@@ -286,13 +296,13 @@ def generate_trip(
     # Masa total (con sloshing en cisterna)
     eff_load = load_pct
     if p["sloshing"] and 0.30 < load_pct < 0.80:
-        eff_load = min(load_pct * (1 + 0.08 * np.sin(np.pi*(load_pct-0.30)/0.50)), 1.0)
+        eff_load = min(load_pct * (1 + 0.08 * np.sin(np.pi * (load_pct - 0.30) / 0.50)), 1.0)
     mass_kg = _total_mass(p, eff_load)
 
-    # Pendiente
+    # Pendiente: componente media + variación sinusoidal + ruido
     t_arr = np.linspace(0, 1, T)
     slope = (avg_slope
-             + 1.2 * np.sin(2*np.pi * t_arr * rng.uniform(0.8, 1.5))
+             + 1.2 * np.sin(2 * np.pi * t_arr * rng.uniform(0.8, 1.5))
              + 0.6 * rng.standard_normal(T)).astype(np.float32)
     slope = np.clip(slope, -20, 20)
 
@@ -300,9 +310,9 @@ def generate_trip(
     speed = _speed_profile(T, p, slope, driving_style, rng)
 
     # Temperatura exterior (curva diurna)
-    hour = np.linspace(7, 15, T)
-    ext_temp = (avg_temp + 3.0*np.sin(np.pi*(hour-6)/12)
-                + rng.standard_normal(T)*1.5).astype(np.float32)
+    hour     = np.linspace(7, 15, T)
+    ext_temp = (avg_temp + 3.0 * np.sin(np.pi * (hour - 6) / 12)
+                + rng.standard_normal(T) * 1.5).astype(np.float32)
 
     # Lluvia en rachas
     rain = np.zeros(T, dtype=np.float32)
@@ -310,7 +320,7 @@ def generate_trip(
         for _ in range(rng.integers(1, 4)):
             s = rng.integers(0, T)
             l = rng.integers(20, 80)
-            rain[s: s+l] = float(np.clip(precipitation * rng.uniform(0.5, 1.5), 0, 100))
+            rain[s: s + l] = float(np.clip(precipitation * rng.uniform(0.5, 1.5), 0, 100))
 
     # Simulación paso a paso
     rpm_arr  = np.zeros(T, dtype=np.float32)
@@ -323,37 +333,38 @@ def generate_trip(
         s = float(slope[i])
         a = float((speed[i] - speed[i-1]) / 3.6 / 60) if i > 0 else 0.0
 
-        P_kW = _engine_power_kW(p, v, s, mass_kg, a, wind_ms=wind_kmh/3.6)
-        rpm  = _select_gear(p, v) * (1.0 + driving_style * 0.12)
-        rpm  = float(np.clip(rpm, p["rpm_idle"], p["rpm_max"]))
+        P_kW    = _engine_power_kW(p, v, s, mass_kg, a, wind_ms=wind_kmh / 3.6)
+        rpm     = _select_gear(p, v) * (1.0 + driving_style * 0.12)
+        rpm     = float(np.clip(rpm, p["rpm_idle"], p["rpm_max"]))
 
         temp_factor = 1.0
         if ext_temp[i] > 25:
             temp_factor += (float(ext_temp[i]) - 25) * 0.004
         elif ext_temp[i] < 5:
             temp_factor += (5 - float(ext_temp[i])) * 0.006
-        fuel   = _fuel_l100(p, v, P_kW, rpm) * temp_factor
+
+        fuel    = _fuel_l100(p, v, P_kW, rpm) * temp_factor
         T_motor = _engine_temp(T_motor, P_kW, p["P_engine_kW"], float(ext_temp[i]), 1.0, p)
 
-        # Ruido sensor + glitch CAN (0.5% — reducido de 1%)
-        glitch = 3.0 if rng.random() < 0.005 else 1.0
-        rpm_arr[i]  = np.clip(rpm  + rng.standard_normal()*noise_level*40*glitch,
+        # Ruido sensor + glitch CAN (0.5%)
+        glitch      = 3.0 if rng.random() < 0.005 else 1.0
+        rpm_arr[i]  = np.clip(rpm   + rng.standard_normal() * noise_level * 40  * glitch,
                                p["rpm_idle"], p["rpm_max"])
-        fuel_arr[i] = np.clip(fuel + rng.standard_normal()*noise_level*1.0*glitch, 5, 120)
-        temp_arr[i] = np.clip(T_motor + rng.standard_normal()*noise_level*0.8,     40, 115)
+        fuel_arr[i] = np.clip(fuel  + rng.standard_normal() * noise_level * 1.0 * glitch, 5, 120)
+        temp_arr[i] = np.clip(T_motor + rng.standard_normal() * noise_level * 0.8,        40, 115)
 
-    # Suavizar consumo con media móvil de 5 min para eliminar picos de aceleración
+    # Media móvil de 5 pasos para suavizar picos de consumo en aceleración
     fuel_kernel = np.ones(5) / 5
-    fuel_arr = np.convolve(fuel_arr, fuel_kernel, mode='same').astype(np.float32)
+    fuel_arr    = np.convolve(fuel_arr, fuel_kernel, mode="same").astype(np.float32)
 
     load_arr = np.clip(
-        eff_load - np.linspace(0, eff_load*0.02, T) + rng.standard_normal(T)*0.005,
-        0, 1
+        eff_load - np.linspace(0, eff_load * 0.02, T) + rng.standard_normal(T) * 0.005,
+        0, 1,
     ).astype(np.float32)
 
     trip = np.stack([speed, fuel_arr, rpm_arr, temp_arr,
                      slope, ext_temp, rain, load_arr], axis=1)
-    trip = np.clip(2*(trip - MINS)/(MAXS - MINS) - 1, -1, 1)
+    trip = np.clip(2 * (trip - MINS) / (MAXS - MINS) - 1, -1, 1)
     return trip.astype(np.float32)
 
 
@@ -369,16 +380,18 @@ def generate_conditioning_vector(
     load_pct:      float = 0.7,
     vehicle_type:  int   = 0,
     day_of_week:   int   = 0,
+    driving_style: float = 0.5,
 ) -> np.ndarray:
-    vehicle_onehot          = np.zeros(3, dtype=np.float32)
+    vehicle_onehot               = np.zeros(3, dtype=np.float32)
     vehicle_onehot[vehicle_type] = 1.0
-    dow_onehot              = np.zeros(7, dtype=np.float32)
-    dow_onehot[day_of_week] = 1.0
+    dow_onehot                   = np.zeros(7, dtype=np.float32)
+    dow_onehot[day_of_week]      = 1.0
     c = np.array([
-        np.clip(avg_slope/10.0,      -1, 1),
-        np.clip(avg_temp/40.0,       -1, 1),
-        np.clip(precipitation/20.0,   0, 1),
+        np.clip(avg_slope    / 10.0, -1, 1),
+        np.clip(avg_temp     / 40.0, -1, 1),
+        np.clip(precipitation / 20.0, 0, 1),
         np.clip(load_pct,             0, 1),
+        np.clip(driving_style,        0, 1),
     ], dtype=np.float32)
     c = np.concatenate([c, vehicle_onehot, dow_onehot])
     c = np.pad(c, (0, C_DIM - len(c)))
@@ -412,7 +425,9 @@ class TripDataset(Dataset):
                 avg_slope=avg_slope, avg_temp=avg_temp,
                 precipitation=precipitation, load_pct=load_pct,
                 vehicle_type=vehicle_type, day_of_week=day_of_week,
+                driving_style=driving_style,
             )
+
             self.trips.append(torch.tensor(trip))
             self.conditions.append(torch.tensor(c))
 
@@ -427,8 +442,10 @@ def get_dataloaders(n_trips: int = 2000, batch_size: int = 64, seed: int = 42):
     dataset  = TripDataset(n_trips=n_trips, seed=seed)
     n_val    = int(0.2 * len(dataset))
     train_ds, val_ds = torch.utils.data.random_split(
-        dataset, [len(dataset)-n_val, n_val],
+        dataset, [len(dataset) - n_val, n_val],
         generator=torch.Generator().manual_seed(seed),
     )
-    return (DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0),
-            DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=0))
+    return (
+        DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0),
+        DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=0),
+    )

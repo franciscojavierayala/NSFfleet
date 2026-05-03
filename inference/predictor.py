@@ -90,17 +90,25 @@ class FleetPredictor:
         Genera n_samples viajes sintéticos para la ruta especificada
         y devuelve los intervalos de confianza por tramo.
         """
-        c = generate_conditioning_vector(
-            avg_slope=avg_slope,
-            avg_temp=avg_temp,
-            precipitation=precipitation,
-            load_pct=load_pct,
-            vehicle_type=vehicle_type,
-            day_of_week=day_of_week,
-        )
-        c_tensor  = torch.tensor(c)
-        trips     = self.model.sample(c_tensor, n_samples=n_samples)
-        trips_np  = trips.cpu().numpy()
+        rng          = np.random.default_rng()
+        n_styles     = 10
+        per_style    = n_samples // n_styles   # 10 con n_samples=100
+        driving_styles = rng.uniform(0, 1, n_styles)
+        all_trips    = []
+        for ds in driving_styles:
+            c = generate_conditioning_vector(
+                avg_slope=avg_slope,
+                avg_temp=avg_temp,
+                precipitation=precipitation,
+                load_pct=load_pct,
+                vehicle_type=vehicle_type,
+                day_of_week=day_of_week,
+                driving_style=float(ds),
+            )
+            c_tensor = torch.tensor(c)
+            batch    = self.model.sample(c_tensor, n_samples=per_style)
+            all_trips.append(batch.cpu().numpy())
+        trips_np = np.concatenate(all_trips, axis=0)  # (n_samples, T, F)
 
         # ── Corrección de viento (sin reentrenar) ────────────────────────────
         # A velocidad de autopista, la aerodinámica supone ~28% del consumo.

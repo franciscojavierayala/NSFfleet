@@ -118,7 +118,7 @@ def load_model():
 st.title("🚛 NSFfleet — Predictor de rutas")
 st.caption(
     "Introduce origen y destino. El sistema calcula la ruta real, "
-    "obtiene pendientes y meteorología, y genera 100 viajes sintéticos "
+    "obtiene pendientes y meteorología, y genera viajes sintéticos "
     "para estimar consumo y velocidad con intervalos de confianza P5/P50/P95."
 )
 
