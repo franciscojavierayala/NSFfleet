@@ -48,6 +48,54 @@ CITIES_FALLBACK = [
 ]
 
 
+# ── Distancia haversine entre dos puntos ──────────────────────────────────────
+def haversine(p1: list[float], p2: list[float]) -> float:
+    """Distancia en km entre dos puntos [lat, lon]."""
+    R = 6371
+    lat1, lon1, lat2, lon2 = map(math.radians, [p1[0], p1[1], p2[0], p2[1]])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+# ── Segmentación de polyline por distancia real ───────────────────────────────
+def segment_polyline_by_distance(polyline: list[list[float]], n_segs: int) -> list[list[list[float]]]:
+    """
+    Divide la polyline en n_segs de igual distancia geográfica real,
+    en lugar de por número de waypoints.
+    """
+    if len(polyline) < 2 or n_segs < 1:
+        return [polyline]
+
+    # Calcular distancia acumulada
+    cumulative = [0.0]
+    for i in range(1, len(polyline)):
+        cumulative.append(cumulative[-1] + haversine(polyline[i - 1], polyline[i]))
+
+    total_dist = cumulative[-1]
+    if total_dist == 0:
+        return [polyline]
+
+    seg_dist = total_dist / n_segs
+
+    # Encontrar índices de corte por distancia
+    segments = []
+    for i in range(n_segs):
+        target_start = i * seg_dist
+        target_end = (i + 1) * seg_dist
+
+        start_idx = next((j for j, d in enumerate(cumulative) if d >= target_start), 0)
+        end_idx = next((j for j, d in enumerate(cumulative) if d >= target_end), len(polyline) - 1)
+
+        # Asegurar que cada segmento tiene al menos 2 puntos
+        if end_idx <= start_idx:
+            end_idx = min(start_idx + 1, len(polyline) - 1)
+
+        segments.append(polyline[start_idx : end_idx + 1])
+
+    return segments
+
+
 # ── Cálculo de componente frontal del viento ──────────────────────────────────
 def frontal_wind(wind_speed: float, wind_dir: float, route_bearing: float) -> float:
     """
@@ -294,11 +342,9 @@ if "result" in st.session_state and "context" in st.session_state:
 
         m = folium.Map(location=mid_pt, zoom_start=7, tiles="CartoDB positron")
 
-        seg_size = max(1, len(polyline) // n_segs)
-        for i in range(n_segs):
-            start_i  = i * seg_size
-            end_i    = (i + 1) * seg_size if i < n_segs - 1 else len(polyline)
-            seg_pts  = polyline[start_i:end_i + 1]
+        # FIX: segmentar por distancia real, no por número de waypoints
+        seg_polys = segment_polyline_by_distance(polyline, n_segs)
+        for i, seg_pts in enumerate(seg_polys):
             seg_data = result["segments"][i]
             color    = SEG_COLORS[i % len(SEG_COLORS)]
             tooltip  = (
