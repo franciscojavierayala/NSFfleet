@@ -56,7 +56,7 @@ def check(cond, descripcion):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n" + "═"*60)
-print("  VALIDACIÓN PRÁCTICA — cVAE Fleet")
+print("  VALIDACIÓN PRÁCTICA — NSFFleet")
 print("═"*60)
 
 # ── BLOQUE 1: DISCRIMINACIÓN ──────────────────────────────────────────────────

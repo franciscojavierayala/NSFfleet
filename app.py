@@ -1,5 +1,5 @@
 """
-app.py — Interfaz Streamlit para cVAE Fleet Predictor
+app.py — Interfaz Streamlit para NSFFleet Predictor
 Introduce origen y destino (en texto), selecciona tipo de camión y carga,
 y obtén predicciones de consumo y velocidad con intervalos de confianza.
 
@@ -92,7 +92,7 @@ def search_cities(query: str) -> list[str]:
 
 # ── Configuración de página ────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="cVAE Fleet Predictor",
+    page_title="NSFFleet Predictor",
     page_icon="🚛",
     layout="wide",
 )
@@ -115,7 +115,7 @@ def load_model():
 
 
 # ── Layout principal ───────────────────────────────────────────────────────────
-st.title("🚛 cVAE Fleet — Predictor de rutas")
+st.title("🚛 NSFFleet — Predictor de rutas")
 st.caption(
     "Introduce origen y destino. El sistema calcula la ruta real, "
     "obtiene pendientes y meteorología, y genera 100 viajes sintéticos "

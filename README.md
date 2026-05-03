@@ -1,8 +1,8 @@
-# 🚛 cVAE Fleet — Route Fuel Predictor for Heavy Transport
+# 🚛 NSFFleet — Route Fuel Predictor for Heavy Transport
 
 > **Given an origin and destination, predict fuel consumption and speed with confidence intervals — using real road data, live weather, and a Conditional Variational Autoencoder.**
 
-![cVAE Fleet demo](docs/demo.png)
+![NSFFleet demo](docs/demo.png)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Fleet managers in road freight have no reliable way to estimate fuel consumption before a trip. Static averages ignore terrain, load, weather and driving style. The result: poor planning, budget overruns, and no way to detect anomalous drivers.
 
-**cVAE Fleet solves this by generating probabilistic forecasts** — not a single number, but a P5/P50/P95 range that tells you the realistic best case, expected case, and worst case for any route.
+**NSFFleet solves this by generating probabilistic forecasts** — not a single number, but a P5/P50/P95 range that tells you the realistic best case, expected case, and worst case for any route.
 
 ---
 

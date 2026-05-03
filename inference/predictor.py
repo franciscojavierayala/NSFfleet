@@ -149,7 +149,7 @@ class FleetPredictor:
     def print_report(self, result: dict):
         s = result["summary"]
         print("\n" + "═" * 60)
-        print("  INFORME DE RUTA — cVAE Fleet Predictor")
+        print("  INFORME DE RUTA — NSFFleet Predictor")
         print("═" * 60)
         print(f"  Muestras generadas : {s['n_muestras']}")
         print(f"  Duración estimada  : {s['duracion_minutos']} min")
