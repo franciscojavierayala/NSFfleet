@@ -76,7 +76,9 @@ class Trainer:
         }
         self.best_val_nll: float = float("inf")
         self.best_val_loss: float = float("inf")
-
+        # Fine-tuning: cargar checkpoint previo si existe
+        if (self.checkpoint_dir / "best_model.pt").exists():
+            self.load_checkpoint("best_model.pt")
     # ── Época de entrenamiento ─────────────────────────────────────────────────
     def _train_epoch(self) -> dict:
         self.model.train()
