@@ -1,6 +1,6 @@
 """
 main.py
-Demo ejecutable del sistema NSFFleet.
+Demo ejecutable del sistema NSFfleet.
 
 Ejecutar con:
     python main.py                      # modo sintético (por defecto)
@@ -225,7 +225,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     print("=" * 60)
 
     fig = plt.figure(figsize=(16, 10))
-    title = f"NSFFleet — Demo  [datos: {data_mode}]"
+    title = f"NSFfleet — Demo  [datos: {data_mode}]"
     fig.suptitle(title, fontsize=14, fontweight="bold")
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
 
@@ -311,7 +311,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NSFFleet — Demo")
+    parser = argparse.ArgumentParser(description="NSFfleet — Demo")
     parser.add_argument(
         "--mode", choices=["synthetic", "real"], default="synthetic",
         help="Fuente de datos: 'synthetic' (por defecto) o 'real'",
@@ -334,7 +334,7 @@ if __name__ == "__main__":
         CFG["epochs"] = args.epochs
 
     print(f"\n{'='*60}")
-    print(f"  NSFFleet  —  modo: {CFG['data_mode'].upper()}")
+    print(f"  NSFfleet  —  modo: {CFG['data_mode'].upper()}")
     print(f"{'='*60}\n")
 
     # 1. Datos
