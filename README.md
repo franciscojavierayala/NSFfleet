@@ -1,6 +1,6 @@
 # 🚛 NSFfleet — Route Fuel Predictor for Heavy Transport
 
-> **Given an origin and destination, predict fuel consumption and speed with confidence intervals — using real road data, live weather, and a Conditional Variational Autoencoder.**
+> **Given an origin and destination, predict fuel consumption and speed with confidence intervals — using real road data, live weather, and a Conditional Neural Spline Flow.**
 
 ![NSFfleet demo](docs/demo.png)
 
@@ -23,12 +23,14 @@ Origin + Destination
         ↓
   Elevation profile (Open-Topo-Data)  +  Live weather + wind direction (Open-Meteo)
         ↓
-  Conditional VAE generates N synthetic trips
+  ConditionalFlowModel (Neural Spline Flow) samples N synthetic trips
         ↓
   P5 / P50 / P95 confidence intervals — per segment
 ```
 
 The model was trained on **4,000 synthetic trips** generated with real heavy vehicle physics (aerodynamics, rolling resistance, grade force, BSFC map, 12-speed gearbox, engine thermal model). All APIs are free with no API key required.
+
+The system also supports fine-tuning on **real fleet CANbus data** via `--mode real`.
 
 ---
 
@@ -56,17 +58,26 @@ The model was trained on **4,000 synthetic trips** generated with real heavy veh
 
 ## Key Technical Decisions
 
-**Why a cVAE instead of a regression model or LSTM?**
+**Why a Neural Spline Flow instead of a cVAE?**
 
-A regression model gives one number. A cVAE generates a *distribution* of plausible trips, which is exactly what a fleet manager needs — not "you'll spend 42 l/100km" but "there's a 90% chance you'll spend between 36 and 45".
+The original architecture was a Conditional VAE. VAEs approximate the posterior via the ELBO — which introduces reconstruction error, requires careful KL annealing schedules to avoid posterior collapse, and produces confidence intervals indirectly by averaging imperfect reconstructions.
+
+`ConditionalFlowModel` (implemented with the [`nflows`](https://github.com/bayesiains/nflows) library) replaces this with a **normalizing flow using rational-quadratic spline transforms**. Concretely:
+
+- **Exact log-likelihood** — the training objective is direct NLL minimisation, not an evidence lower bound. The model knows precisely how likely each trip is under the learned distribution.
+- **No KL annealing** — the warmup schedule is gone. The training loop is simpler and more stable.
+- **Sharper confidence intervals** — P5/P50/P95 come directly from sampling the learned density, not from averaging decoder outputs.
+- **Same conditioning interface** — the route vector (elevation, weather, load, vehicle type, day of week, wind frontal component) is passed to the coupling network exactly as before.
+
+The training history now tracks both `train_nll` / `val_nll` (flow objective) and `train_recon` / `val_recon` (reconstruction quality). The best checkpoint is selected by `best_val_nll`.
 
 **Why synthetic physics instead of real data first?**
 
-Real fleet data is scarce, proprietary, and noisy. Training on physics-based synthetic data first gives the model a solid prior — it already understands that uphill burns more than downhill before seeing a single real trip. Fine-tuning on real data afterwards is then much more sample-efficient.
+Real fleet data is scarce, proprietary, and noisy. Training on physics-based synthetic data first gives the model a solid prior — it already understands that uphill burns more than downhill before seeing a single real trip. Fine-tuning on real data afterwards (via `--mode real`) is then much more sample-efficient.
 
 **Why model wind direction and not just wind speed?**
 
-A 25 km/h crosswind has almost zero aerodynamic penalty. The same wind head-on increases drag by ~12%. The model computes the frontal component using the bearing difference between wind direction and route heading.
+A 25 km/h crosswind has almost zero aerodynamic penalty. The same wind head-on increases drag by ~12%. Both `app.py` and `main.py` compute the frontal wind component using `cos(bearing_diff)` between wind direction and route heading, and pass it as a conditioning feature to the flow.
 
 ---
 
@@ -76,8 +87,11 @@ A 25 km/h crosswind has almost zero aerodynamic penalty. The same wind head-on i
 # Install dependencies
 pip install -r requirements.txt
 
-# Train the model (CPU, ~2h)
+# Train on synthetic data (CPU, ~2h)
 python main.py
+
+# Train on real fleet data (CSV or Parquet)
+python main.py --mode real --data data/mis_viajes.parquet
 
 # Validate physics
 python validate.py
@@ -86,27 +100,36 @@ python validate.py
 streamlit run app.py
 ```
 
+> ⚠️ `validate.py` still imports `model.cvae.ConditionalVAE` and will fail until it is
+> migrated to `model.nflow_model.ConditionalFlowModel`. This is a known pending task.
+
 ---
 
 ## Project Structure
 
 ```
-cVAEfleet/
-├── app.py                  ← Streamlit UI
-├── main.py                 ← Training pipeline
-├── validate.py             ← 11-point physical validation suite
+NSFfleet/
+├── app.py                      ← Streamlit UI (ConditionalFlowModel)
+├── main.py                     ← Training pipeline (--mode synthetic | real)
+├── validate.py                 ← 11-point physical validation ⚠️ pending NSF migration
+├── requirements.txt            ← Includes nflows>=0.14
 ├── data/
-│   └── synthetic.py        ← Physics engine (aero, BSFC map, gearbox, thermal)
+│   ├── synthetic.py            ← Physics engine (aero, BSFC map, gearbox, thermal)
+│   └── real_dataset.py         ← Real telemetry loader (CSV / Parquet)
 ├── model/
-│   └── cvae.py             ← Conditional VAE architecture
+│   └── nflow_model.py          ← ConditionalFlowModel (Neural Spline Flow via nflows)
 ├── train/
-│   └── trainer.py          ← Training loop with KL annealing
+│   └── trainer.py              ← Training loop — NLL optimisation, no KL annealing
 ├── inference/
-│   └── predictor.py        ← Confidence interval generation
+│   └── predictor.py            ← FleetPredictor — P5/P50/P95 interval generation
 ├── route/
-│   └── route_builder.py    ← Route → conditioning vector pipeline
-└── anomaly/
-    └── filter.py           ← Isolation Forest anomaly detection
+│   └── route_builder.py        ← Route → conditioning vector pipeline
+├── anomaly/
+│   └── filter.py               ← Isolation Forest anomaly detection
+└── checkpoints/
+    ├── best_model.pt           ← Best checkpoint (selected by val NLL)
+    ├── scaler.json             ← Feature scaler for real data mode
+    └── training_meta.json      ← Training run metadata (mode, epochs, best NLL)
 ```
 
 ---
@@ -123,7 +146,8 @@ cVAEfleet/
 
 ## Roadmap
 
-- [ ] Fine-tuning on real fleet CANbus data
+- [ ] Migrate `validate.py` to `ConditionalFlowModel`
+- [ ] Fine-tuning on real fleet CANbus data (pipeline ready, needs labelled data)
 - [ ] Rain effect on rolling resistance
 - [ ] Cost estimation in euros
 - [ ] Real-time anomaly alerts (actual trip vs P95 prediction)
@@ -133,7 +157,7 @@ cVAEfleet/
 
 ## Stack
 
-Python 3.11 · PyTorch · Streamlit · OSRM · Open-Meteo · Open-Topo-Data · Folium · CPU only
+Python 3.11 · PyTorch · nflows · Streamlit · OSRM · Open-Meteo · Open-Topo-Data · Folium · CPU only
 
 ---
 
