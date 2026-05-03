@@ -6,7 +6,7 @@ por tramo para una ruta nueva.
 
 import numpy as np
 import torch
-from model.cvae import ConditionalVAE
+from model.nflow_model import ConditionalFlowModel
 
 # ── IMPORTANTE: MINS, MAXS y VAR_NAMES se importan desde synthetic.py ─────────
 # Nunca duplicar estos rangos aquí. Si cambian en synthetic.py (p.ej. al añadir
@@ -67,7 +67,7 @@ class FleetPredictor:
         predictor.print_report(result)
     """
 
-    def __init__(self, model: ConditionalVAE, device: str = None):
+    def __init__(self, model: ConditionalFlowModel, device: str = None):
         self.model  = model
         self.device = torch.device(device if device else
                                    ("cuda" if torch.cuda.is_available() else "cpu"))

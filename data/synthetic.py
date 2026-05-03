@@ -212,8 +212,7 @@ def _speed_profile(T, p, slope, driving_style, rng):
     while t_cur < T:
         remaining = T - t_cur
 
-        # Parada obligatoria cada ~250-280 min (reglamento 561/2006)
-        # Reducida a 20-30 min para rutas de larga distancia típicas
+        # Parada reglamentaria cada ~230-280 min (reglamento 561/2006)
         if consec >= rng.integers(230, 280):
             pause = min(rng.integers(20, 35), remaining)
             speed[t_cur: t_cur + pause] = 0.0
@@ -221,40 +220,44 @@ def _speed_profile(T, p, slope, driving_style, rng):
             consec  = 0
             continue
 
+        # Trucks larga distancia: 90% autopista (antes 85%)
         r = rng.random()
-        if r < 0.85:                              # 85% autopista (antes 68%)
-            stype = "hw";  slen = rng.integers(40, 100)
-        elif r < 0.96:                            # 11% secundaria
-            stype = "sec"; slen = rng.integers(15, 40)
-        else:                                     # 4% urbano
-            stype = "urb"; slen = rng.integers(5, 15)
+        if r < 0.90:
+            stype = "hw";  slen = rng.integers(50, 120)
+        elif r < 0.97:
+            stype = "sec"; slen = rng.integers(10, 30)
+        else:
+            stype = "urb"; slen = rng.integers(5, 12)
         slen = min(slen, remaining)
 
         sl_mean = slope[t_cur: t_cur + slen].mean() if slen > 0 else 0.0
 
         if stype == "hw":
-            v_c = v_max * rng.uniform(0.88, 1.0) - abs(sl_mean) * 3
-            v_c = max(v_c, v_max * 0.60)
-            seg = np.clip(v_c + rng.standard_normal(slen)*3*(0.5+driving_style*0.5),
-                          v_max*0.55, v_max)
-            ramp = np.minimum(np.arange(slen) / 5.0, 1.0)
+            v_c = v_max * rng.uniform(0.88, 0.98) - abs(sl_mean) * 2.5
+            v_c = max(v_c, v_max * 0.70)
+            # Ruido reducido a 1.5 sigma (antes 3) — menos aceleraciones ficticias
+            seg = np.clip(
+                v_c + rng.standard_normal(slen) * 1.5 * (0.5 + driving_style * 0.5),
+                v_max * 0.65, v_max
+            )
+            ramp = np.minimum(np.arange(slen) / 8.0, 1.0)
             speed[t_cur: t_cur + slen] = (seg * ramp).astype(np.float32)
 
         elif stype == "sec":
-            v_c = max(v_max * rng.uniform(0.55, 0.72) - abs(sl_mean)*2, 20.0)
-            seg = np.clip(v_c + rng.standard_normal(slen)*4, 20, v_max*0.75)
+            v_c = max(v_max * rng.uniform(0.55, 0.70) - abs(sl_mean) * 2, 25.0)
+            seg = np.clip(v_c + rng.standard_normal(slen) * 3, 25, v_max * 0.72)
             speed[t_cur: t_cur + slen] = seg.astype(np.float32)
 
         else:
-            v_c = rng.uniform(20, 45)
-            seg = np.clip(v_c + rng.standard_normal(slen)*5, 0, 55)
+            v_c = rng.uniform(25, 40)
+            seg = np.clip(v_c + rng.standard_normal(slen) * 4, 0, 50)
             speed[t_cur: t_cur + slen] = seg.astype(np.float32)
 
         t_cur  += slen
         consec += slen
 
-    # Suavizado
-    kernel = np.ones(3) / 3
+    # Suavizado kernel 7 (antes 3) — elimina picos de aceleración bruscos
+    kernel = np.ones(7) / 7
     speed  = np.convolve(speed, kernel, mode="same")
     return np.clip(speed, 0, v_max).astype(np.float32)
 
@@ -267,7 +270,7 @@ def generate_trip(
     load_pct:      float = 0.7,
     driving_style: float = 0.5,
     vehicle_type:  int   = 0,
-    noise_level:   float = 0.03,
+    noise_level:   float = 0.02,  # reducido de 0.03 para menos spikes en consumo
     cold_start:    bool  = False,
     wind_kmh:      float = 0.0,   # positivo=frontal, negativo=trasero
     T:             int   = T,
@@ -332,12 +335,16 @@ def generate_trip(
         fuel   = _fuel_l100(p, v, P_kW, rpm) * temp_factor
         T_motor = _engine_temp(T_motor, P_kW, p["P_engine_kW"], float(ext_temp[i]), 1.0, p)
 
-        # Ruido sensor + glitch CAN (1%)
-        glitch = 5.0 if rng.random() < 0.01 else 1.0
-        rpm_arr[i]  = np.clip(rpm  + rng.standard_normal()*noise_level*50*glitch,
+        # Ruido sensor + glitch CAN (0.5% — reducido de 1%)
+        glitch = 3.0 if rng.random() < 0.005 else 1.0
+        rpm_arr[i]  = np.clip(rpm  + rng.standard_normal()*noise_level*40*glitch,
                                p["rpm_idle"], p["rpm_max"])
-        fuel_arr[i] = np.clip(fuel + rng.standard_normal()*noise_level*1.5*glitch, 5, 120)
-        temp_arr[i] = np.clip(T_motor + rng.standard_normal()*noise_level*1.0,     40, 115)
+        fuel_arr[i] = np.clip(fuel + rng.standard_normal()*noise_level*1.0*glitch, 5, 120)
+        temp_arr[i] = np.clip(T_motor + rng.standard_normal()*noise_level*0.8,     40, 115)
+
+    # Suavizar consumo con media móvil de 5 min para eliminar picos de aceleración
+    fuel_kernel = np.ones(5) / 5
+    fuel_arr = np.convolve(fuel_arr, fuel_kernel, mode='same').astype(np.float32)
 
     load_arr = np.clip(
         eff_load - np.linspace(0, eff_load*0.02, T) + rng.standard_normal(T)*0.005,

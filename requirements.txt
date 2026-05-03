@@ -9,3 +9,4 @@ requests>=2.31.0
 geopy>=2.4.0
 pandas>=2.0.0
 streamlit-searchbox>=0.1.6
+nflows>=0.14

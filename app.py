@@ -23,7 +23,7 @@ import pandas as pd
 import requests as _requests
 from streamlit_searchbox import st_searchbox
 
-from model.cvae import ConditionalVAE
+from model.nflow_model import ConditionalFlowModel
 from inference.predictor import FleetPredictor
 from route.route_builder import build_route_context
 
@@ -105,7 +105,7 @@ DAY_NAMES     = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"
 @st.cache_resource(show_spinner="Cargando modelo...")
 def load_model():
     checkpoint_path = Path("checkpoints/best_model.pt")
-    model = ConditionalVAE(latent_dim=64)
+    model = ConditionalFlowModel()
     if checkpoint_path.exists():
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])

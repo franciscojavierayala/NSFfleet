@@ -97,54 +97,53 @@ def step_data(data_mode: str = "synthetic"):
 # ── 2. ENTRENAMIENTO ──────────────────────────────────────────────────────────
 def step_train(train_loader, val_loader, data_mode: str = "synthetic"):
     print("=" * 60)
-    print(f"PASO 2 — Entrenando cVAE  [modo: {data_mode}]")
+    print(f"PASO 2 — Entrenando ConditionalFlowModel (NSF)  [modo: {data_mode}]")
     print("=" * 60)
-
-    from model.cvae import ConditionalVAE
+ 
+    # MIGRACIÓN: ConditionalVAE → ConditionalFlowModel
+    # El Trainer ya no recibe warmup_epochs (los flujos no necesitan KL annealing)
+    from model.nflow_model import ConditionalFlowModel
     from train.trainer import Trainer
-
+ 
     epochs = CFG["epochs"] if data_mode == "synthetic" else max(CFG["epochs"], 50)
-
-    model = ConditionalVAE(latent_dim=CFG["latent_dim"])
+ 
+    model = ConditionalFlowModel()   # hiperparámetros por defecto optimizados para CPU
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         lr=CFG["lr"],
-        warmup_epochs=CFG["warmup_epochs"],
         checkpoint_dir=CFG["checkpoint_dir"],
     )
     history = trainer.train(epochs=epochs)
-
+ 
     # FIX: recargar el mejor checkpoint guardado en disco.
-    # Tras trainer.train(), el objeto model tiene los pesos de la ÚLTIMA época,
-    # no los del mejor checkpoint. Sin este paso, step_inference usaría un modelo
-    # peor que el seleccionado durante el entrenamiento.
+    # Tras trainer.train(), el modelo ya se recarga internamente, pero recargamos
+    # explícitamente aquí para garantizar consistencia con la lógica de app.py.
     best_path = Path(CFG["checkpoint_dir"]) / "best_model.pt"
     if best_path.exists():
         ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"\n  ✓ Mejor modelo recargado desde: {best_path}")
-        print(f"    best_val_recon : {trainer.best_val_recon:.4f}")
-        print(f"    best_val_loss  : {trainer.best_val_loss:.4f}")
+        print(f"    best_val_nll  : {trainer.best_val_nll:.4f}")
+        print(f"    best_val_loss : {trainer.best_val_loss:.4f}")
     else:
         print("\n  ⚠️  No se encontró best_model.pt — usando pesos de la última época.")
-        print("     Esto ocurre si el entrenamiento finalizó antes del warmup.")
-
+ 
     # Guardar metadatos del entrenamiento
     meta_path = Path(CFG["checkpoint_dir"]) / "training_meta.json"
     meta = {
-        "data_mode":      data_mode,
-        "epochs":         epochs,
-        "warmup_epochs":  CFG["warmup_epochs"],
-        "n_train":        len(train_loader.dataset),
-        "n_val":          len(val_loader.dataset),
-        "best_val_recon": trainer.best_val_recon,
-        "best_val_loss":  trainer.best_val_loss,
+        "data_mode":    data_mode,
+        "model_type":   "ConditionalFlowModel",
+        "epochs":       epochs,
+        "n_train":      len(train_loader.dataset),
+        "n_val":        len(val_loader.dataset),
+        "best_val_nll": trainer.best_val_nll,
+        "best_val_loss": trainer.best_val_loss,
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
-
+ 
     return model, trainer, history
 
 
@@ -241,14 +240,16 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     ax1.legend()
     ax1.grid(alpha=0.3)
 
-    # KL annealing
+    # NLL del flujo 
     ax2 = fig.add_subplot(gs[0, 1])
-    ax2.plot(epochs_range, history["kl_weight"], color="#2CA02C")
-    ax2.plot(epochs_range, history["train_kl"],  color="#9467BD", linestyle="--")
-    ax2.set_title("KL annealing")
+    ax2.plot(epochs_range, history["train_nll"], label="Train NLL", color="#2CA02C")
+    ax2.plot(epochs_range, history["val_nll"],   label="Val NLL",   color="#9467BD",
+             linestyle="--")
+    ax2.set_title("Log-verosimilitud (NLL)")
     ax2.set_xlabel("Época")
-    ax2.legend(["KL weight", "KL loss"], fontsize=8)
+    ax2.legend(fontsize=8)
     ax2.grid(alpha=0.3)
+
 
     # Distribución de consumo
     ax3 = fig.add_subplot(gs[0, 2])
