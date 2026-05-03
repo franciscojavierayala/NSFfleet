@@ -125,7 +125,7 @@ NSFfleet/
 ├── model/
 │   └── nflow_model.py          ← ConditionalFlowModel (Neural Spline Flow via nflows)
 ├── train/
-│   └── trainer.py              ← Training loop — NLL optimisation, no KL annealing
+│   └── trainer.py              ← Training loop — NLL optimisation
 ├── inference/
 │   └── predictor.py            ← FleetPredictor — P5/P50/P95 with driving style diversity
 ├── route/
