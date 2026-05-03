@@ -24,6 +24,7 @@ Origin + Destination
   Elevation profile (Open-Topo-Data)  +  Live weather + wind direction (Open-Meteo)
         ↓
   ConditionalFlowModel (Neural Spline Flow) samples N synthetic trips
+  across 10 randomised driving styles
         ↓
   P5 / P50 / P95 confidence intervals — per segment
 ```
@@ -71,6 +72,10 @@ The original architecture was a Conditional VAE. VAEs approximate the posterior 
 
 The training history now tracks both `train_nll` / `val_nll` (flow objective) and `train_recon` / `val_recon` (reconstruction quality). The best checkpoint is selected by `best_val_nll`.
 
+**Why model driving style diversity at inference time?**
+
+A single conditioning vector produces samples from one implicit driver profile. At inference, `FleetPredictor` draws 10 driving styles uniformly from `[0, 1]` and generates `n_samples / 10` trips per style, then concatenates them. This means the P5/P95 interval reflects genuine inter-driver variability, not just model uncertainty — which is what fleet managers actually need.
+
 **Why synthetic physics instead of real data first?**
 
 Real fleet data is scarce, proprietary, and noisy. Training on physics-based synthetic data first gives the model a solid prior — it already understands that uphill burns more than downhill before seeing a single real trip. Fine-tuning on real data afterwards (via `--mode real`) is then much more sample-efficient.
@@ -93,15 +98,16 @@ python main.py
 # Train on real fleet data (CSV or Parquet)
 python main.py --mode real --data data/mis_viajes.parquet
 
+# Regenerate output charts without retraining
+.\quick_viz.ps1          # Windows PowerShell
+# python quick_viz_tmp.py  # or directly via Python
+
 # Validate physics
 python validate.py
 
 # Launch the app
 streamlit run app.py
 ```
-
-> ⚠️ `validate.py` still imports `model.cvae.ConditionalVAE` and will fail until it is
-> migrated to `model.nflow_model.ConditionalFlowModel`. This is a known pending task.
 
 ---
 
@@ -111,7 +117,7 @@ streamlit run app.py
 NSFfleet/
 ├── app.py                      ← Streamlit UI (ConditionalFlowModel)
 ├── main.py                     ← Training pipeline (--mode synthetic | real)
-├── validate.py                 ← 11-point physical validation ⚠️ pending NSF migration
+├── validate.py                 ← Physical validation
 ├── requirements.txt            ← Includes nflows>=0.14
 ├── data/
 │   ├── synthetic.py            ← Physics engine (aero, BSFC map, gearbox, thermal)
@@ -121,7 +127,7 @@ NSFfleet/
 ├── train/
 │   └── trainer.py              ← Training loop — NLL optimisation, no KL annealing
 ├── inference/
-│   └── predictor.py            ← FleetPredictor — P5/P50/P95 interval generation
+│   └── predictor.py            ← FleetPredictor — P5/P50/P95 with driving style diversity
 ├── route/
 │   └── route_builder.py        ← Route → conditioning vector pipeline
 ├── anomaly/
@@ -146,7 +152,6 @@ NSFfleet/
 
 ## Roadmap
 
-- [ ] Migrate `validate.py` to `ConditionalFlowModel`
 - [ ] Fine-tuning on real fleet CANbus data (pipeline ready, needs labelled data)
 - [ ] Rain effect on rolling resistance
 - [ ] Cost estimation in euros
