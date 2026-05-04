@@ -89,7 +89,7 @@ def check(cond, descripcion):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n" + "═"*60)
-print("  VALIDACIÓN PRÁCTICA — NSFfleet (cNSF)")
+print("  VALIDACIÓN PRÁCTICA — cNSFfleet (cNSF)")
 print("═"*60)
 
 # ── BLOQUE 1: DISCRIMINACIÓN DE CONSUMO ──────────────────────────────────────

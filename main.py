@@ -1,6 +1,6 @@
 """
 main.py
-Demo ejecutable del sistema NSFfleet.
+Demo ejecutable del sistema cNSFfleet.
 
 Ejecutar con:
     python main.py                      # modo sintético (por defecto)
@@ -224,7 +224,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     print("=" * 60)
 
     fig = plt.figure(figsize=(16, 10))
-    fig.suptitle(f"NSFfleet — Demo  [datos: {data_mode}]", fontsize=14, fontweight="bold")
+    fig.suptitle(f"cNSFfleet — Demo  [datos: {data_mode}]", fontsize=14, fontweight="bold")
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
 
     # Curvas de reconstrucción
@@ -308,7 +308,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NSFfleet — Demo")
+    parser = argparse.ArgumentParser(description="cNSFfleet — Demo")
     parser.add_argument(
         "--mode", choices=["synthetic", "real"], default="synthetic",
         help="Fuente de datos: 'synthetic' (por defecto) o 'real'",
@@ -327,7 +327,7 @@ def main() -> None:
     _set_seeds(cfg.seed)
 
     print(f"\n{'='*60}")
-    print(f"  NSFfleet  —  modo: {cfg.data_mode.upper()}")
+    print(f"  cNSFfleet  —  modo: {cfg.data_mode.upper()}")
     print(f"{'='*60}\n")
 
     train_loader, val_loader, data_mode = step_data(cfg)

@@ -1,5 +1,5 @@
 """
-app.py — Interfaz Streamlit para NSFfleet Predictor
+app.py — Interfaz Streamlit para cNSFfleet Predictor
 Ejecutar con: streamlit run app.py
 """
 
@@ -145,7 +145,7 @@ def search_cities(query):
         return local_matches[:8]
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="NSFfleet", page_icon="🚛", layout="wide")
+st.set_page_config(page_title="cNSFfleet", page_icon="🚛", layout="wide")
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
