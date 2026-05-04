@@ -18,7 +18,7 @@ from data.synthetic import MINS, MAXS, generate_conditioning_vector
 
 # ── Carga del modelo ──────────────────────────────────────────────────────────
 model = ConditionalFlowModel()
-ckpt  = torch.load("checkpoints/best_model.pt", map_location="cpu", weights_only=False)
+ckpt  = torch.load("checkpoints/best_model.pt", map_location="cpu", weights_only=True)
 model.load_state_dict(ckpt["model_state_dict"])
 model.eval()
 

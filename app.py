@@ -1,7 +1,5 @@
 """
 app.py — Interfaz Streamlit para NSFfleet Predictor
-Introduce origen y destino (en texto), selecciona tipo de camión y carga,
-y obtén predicciones de consumo y velocidad con intervalos de confianza.
 
 Ejecutar con:
     streamlit run app.py
@@ -9,8 +7,13 @@ Ejecutar con:
 
 import sys
 import math
+import time
 from pathlib import Path
 from datetime import date, timedelta
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -19,9 +22,6 @@ import torch
 import numpy as np
 import folium
 from streamlit_folium import st_folium
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 import requests as _requests
 from streamlit_searchbox import st_searchbox
@@ -29,7 +29,7 @@ from streamlit_searchbox import st_searchbox
 from model.nflow_model import ConditionalFlowModel
 from inference.predictor import FleetPredictor
 from route.route_builder import build_route_context
-from data.synthetic import MINS, MAXS  # FIX: usar rangos reales en lugar de hardcode
+from data.synthetic import MINS, MAXS
 
 
 # ── Lista de ciudades frecuentes para fallback rápido ────────────────────────
@@ -47,8 +47,13 @@ CITIES_FALLBACK = [
     "Milán, Italia", "Roma, Italia",
 ]
 
+# Nominatim ToS: máximo 1 request/segundo.
+# Usamos este timestamp para aplicar throttle simple entre llamadas reales.
+_last_nominatim_call: float = 0.0
+_NOMINATIM_MIN_INTERVAL = 1.1  # segundos entre requests
 
-# ── Distancia haversine entre dos puntos ──────────────────────────────────────
+
+# ── Haversine ─────────────────────────────────────────────────────────────────
 def haversine(p1: list[float], p2: list[float]) -> float:
     """Distancia en km entre dos puntos [lat, lon]."""
     R = 6371
@@ -59,15 +64,13 @@ def haversine(p1: list[float], p2: list[float]) -> float:
 
 
 # ── Segmentación de polyline por distancia real ───────────────────────────────
-def segment_polyline_by_distance(polyline: list[list[float]], n_segs: int) -> list[list[list[float]]]:
-    """
-    Divide la polyline en n_segs de igual distancia geográfica real,
-    en lugar de por número de waypoints.
-    """
+def segment_polyline_by_distance(
+    polyline: list[list[float]], n_segs: int
+) -> list[list[list[float]]]:
+    """Divide la polyline en n_segs de igual distancia geográfica real."""
     if len(polyline) < 2 or n_segs < 1:
         return [polyline]
 
-    # Calcular distancia acumulada
     cumulative = [0.0]
     for i in range(1, len(polyline)):
         cumulative.append(cumulative[-1] + haversine(polyline[i - 1], polyline[i]))
@@ -77,20 +80,14 @@ def segment_polyline_by_distance(polyline: list[list[float]], n_segs: int) -> li
         return [polyline]
 
     seg_dist = total_dist / n_segs
-
-    # Encontrar índices de corte por distancia
     segments = []
     for i in range(n_segs):
         target_start = i * seg_dist
-        target_end = (i + 1) * seg_dist
-
+        target_end   = (i + 1) * seg_dist
         start_idx = next((j for j, d in enumerate(cumulative) if d >= target_start), 0)
-        end_idx = next((j for j, d in enumerate(cumulative) if d >= target_end), len(polyline) - 1)
-
-        # Asegurar que cada segmento tiene al menos 2 puntos
+        end_idx   = next((j for j, d in enumerate(cumulative) if d >= target_end), len(polyline) - 1)
         if end_idx <= start_idx:
             end_idx = min(start_idx + 1, len(polyline) - 1)
-
         segments.append(polyline[start_idx : end_idx + 1])
 
     return segments
@@ -109,7 +106,35 @@ def frontal_wind(wind_speed: float, wind_dir: float, route_bearing: float) -> fl
     return wind_speed * math.cos(angle_diff)
 
 
-# ── Autocompletado de ciudades con Nominatim ─────────────────────────────────
+@st.cache_data(ttl=3_600, show_spinner=False)
+def _fetch_nominatim(query: str) -> list[dict]:
+    """
+    Llama a Nominatim con throttle (≤ 1 req/s según ToS) y caché de 1 hora.
+    Al estar decorada con @st.cache_data, el mismo query no genera una segunda
+    llamada de red durante la sesión (ni entre sesiones durante ttl segundos).
+    """
+    global _last_nominatim_call
+    elapsed = time.monotonic() - _last_nominatim_call
+    if elapsed < _NOMINATIM_MIN_INTERVAL:
+        time.sleep(_NOMINATIM_MIN_INTERVAL - elapsed)
+
+    resp = _requests.get(
+        "https://nominatim.openstreetmap.org/search",
+        params={
+            "q": query,
+            "format": "json",
+            "limit": 7,
+            "addressdetails": 1,
+            "accept-language": "es",
+        },
+        headers={"User-Agent": "nsffleet_demo/1.0"},
+        timeout=4,
+    )
+    resp.raise_for_status()
+    _last_nominatim_call = time.monotonic()
+    return resp.json()
+
+
 def search_cities(query: str) -> list[str]:
     """Devuelve sugerencias de ciudades mientras el usuario escribe."""
     if not query or len(query) < 2:
@@ -119,19 +144,7 @@ def search_cities(query: str) -> list[str]:
     local_matches = [c for c in CITIES_FALLBACK if q_lower in c.lower()]
 
     try:
-        resp = _requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": query,
-                "format": "json",
-                "limit": 7,
-                "addressdetails": 1,
-                "accept-language": "es",
-            },
-            headers={"User-Agent": "nsffleet_demo/1.0"},  # FIX: nombre actualizado
-            timeout=4,
-        )
-        results = resp.json()
+        results = _fetch_nominatim(query)
         seen = set(local_matches)
         suggestions = list(local_matches)
         for r in results:
@@ -149,7 +162,18 @@ def search_cities(query: str) -> list[str]:
                 seen.add(short)
                 suggestions.append(short)
         return suggestions[:8]
-    except Exception:
+
+    except _requests.exceptions.Timeout:
+        st.toast("⏱️ Nominatim tardó demasiado — mostrando ciudades frecuentes.", icon="⚠️")
+        return local_matches[:8]
+    except _requests.exceptions.ConnectionError:
+        st.toast("🌐 Sin conexión a Nominatim — mostrando ciudades frecuentes.", icon="⚠️")
+        return local_matches[:8]
+    except _requests.exceptions.HTTPError as e:
+        st.toast(f"⚠️ Error Nominatim ({e.response.status_code}) — mostrando ciudades frecuentes.", icon="⚠️")
+        return local_matches[:8]
+    except (ValueError, KeyError):
+        # Fallo de parsing de la respuesta JSON
         return local_matches[:8]
 
 
@@ -170,7 +194,7 @@ def load_model():
     checkpoint_path = Path("checkpoints/best_model.pt")
     model = ConditionalFlowModel()
     if checkpoint_path.exists():
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt["model_state_dict"])
         model.eval()
         return model, True
@@ -266,6 +290,7 @@ if predict_btn and origin and destination:
     with st.status("Calculando ruta...", expanded=True) as status_box:
 
         st.write("🗺️ Geocodificando origen y destino...")
+
         try:
             context = build_route_context(
                 origin=origin,
@@ -275,10 +300,30 @@ if predict_btn and origin and destination:
                 day_of_week=day_of_week,
                 departure_date=departure_date,
             )
-            st.session_state["context"] = context
-        except Exception as e:
-            st.error(f"Error al obtener la ruta: {e}")
+        except _requests.exceptions.Timeout:
+            st.error(
+                "⏱️ La API de rutas tardó demasiado en responder. "
+                "Comprueba tu conexión e inténtalo de nuevo."
+            )
             st.stop()
+        except _requests.exceptions.ConnectionError:
+            st.error(
+                "🌐 No se pudo conectar con la API de rutas (OSRM). "
+                "Verifica tu conexión a Internet."
+            )
+            st.stop()
+        except KeyError as e:
+            st.error(
+                f"⚠️ La respuesta de la API de rutas no tiene el campo esperado: `{e}`. "
+                "Es posible que la ciudad introducida no sea reconocida. "
+                "Prueba con un nombre más específico (ej. 'Sevilla, España')."
+            )
+            st.stop()
+        except ValueError as e:
+            st.error(f"⚠️ Datos de ruta inválidos: {e}")
+            st.stop()
+
+        st.session_state["context"] = context
 
         st.write(f"✅ Ruta obtenida: {context['route_info']['distance_km']:.0f} km")
         st.write(f"⛰️ Pendiente media: {context['avg_slope']:.1f}%")
@@ -289,12 +334,11 @@ if predict_btn and origin and destination:
         wind_speed    = context["weather"].get("wind_speed", 0.0)
         wind_dir      = context["weather"].get("wind_direction", 0.0)
         route_bearing = context.get("route_bearing", 0.0)
-        wind_frontal  = frontal_wind(wind_speed, wind_dir, route_bearing)  # FIX: función reutilizable
+        wind_frontal  = frontal_wind(wind_speed, wind_dir, route_bearing)
 
         st.write(f"💨 Viento: {wind_speed:.1f} km/h  _(dirección: {wind_dir:.0f}°, componente frontal: {wind_frontal:+.1f} km/h)_")
-
-        # FIX: "cVAE" → "NSF"
         st.write(f"🤖 Generando {n_samples} viajes sintéticos con el NSF...")
+
         predictor = FleetPredictor(model)
         result = predictor.predict_route(
             avg_slope=context["avg_slope"],
@@ -307,7 +351,6 @@ if predict_btn and origin and destination:
             wind_kmh=wind_frontal,
         )
         st.session_state["result"] = result
-
         status_box.update(label="✅ Predicción completada", state="complete")
 
 # ── Resultados ─────────────────────────────────────────────────────────────────
@@ -319,7 +362,7 @@ if "result" in st.session_state and "context" in st.session_state:
 
     st.divider()
 
-    # ── Métricas rápidas ───────────────────────────────────────────────────────
+    # Métricas rápidas
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("📏 Distancia",    f"{ri['distance_km']:.0f} km")
     m2.metric("⏱️ Duración",      f"{ri['duration_min']:.0f} min")
@@ -329,7 +372,7 @@ if "result" in st.session_state and "context" in st.session_state:
 
     st.divider()
 
-    # ── Mapa + intervalos de confianza ─────────────────────────────────────────
+    # Mapa + intervalos de confianza
     col_map, col_ic = st.columns([1.3, 0.7])
 
     with col_map:
@@ -342,7 +385,6 @@ if "result" in st.session_state and "context" in st.session_state:
 
         m = folium.Map(location=mid_pt, zoom_start=7, tiles="CartoDB positron")
 
-        # FIX: segmentar por distancia real, no por número de waypoints
         seg_polys = segment_polyline_by_distance(polyline, n_segs)
         for i, seg_pts in enumerate(seg_polys):
             seg_data = result["segments"][i]
@@ -357,7 +399,6 @@ if "result" in st.session_state and "context" in st.session_state:
                 seg_pts, color=color, weight=6, opacity=0.9,
                 tooltip=folium.Tooltip(tooltip, sticky=True),
             ).add_to(m)
-
             if i > 0:
                 folium.CircleMarker(
                     location=seg_pts[0],
@@ -413,7 +454,6 @@ if "result" in st.session_state and "context" in st.session_state:
         st.write(f"📅 Fecha: **{departure_date.strftime('%d/%m/%Y')}** ({DAY_NAMES[day_of_week]})")
         st.write(f"🌡️ Temperatura: **{context['weather']['temperature']:.1f} °C**")
 
-        # FIX: reutilizar frontal_wind() en lugar de duplicar la fórmula
         _wspd    = context['weather'].get('wind_speed', 0.0)
         _wdir    = context['weather'].get('wind_direction', 0.0)
         _bearing = context.get('route_bearing', 0.0)
@@ -421,7 +461,7 @@ if "result" in st.session_state and "context" in st.session_state:
         _label   = "frontal 🔴" if _wfront > 0 else "trasero 🟢"
         st.write(f"💨 Viento: **{_wspd:.1f} km/h** dir {_wdir:.0f}° → componente {_label} **{abs(_wfront):.1f} km/h**")
 
-    # ── Gráficos ───────────────────────────────────────────────────────────────
+    # Gráficos
     st.divider()
     st.subheader("📈 Análisis por tramos")
 
@@ -462,7 +502,6 @@ if "result" in st.session_state and "context" in st.session_state:
     with col_g2:
         fig2, ax2 = plt.subplots(figsize=(6, 3.2))
 
-        # FIX: usar MAXS/MINS importados de synthetic.py en lugar de hardcode 130
         v_min, v_max = MINS[0], MAXS[0]
         trips_v = (result["trips_raw"][:, :, 0] + 1) / 2 * (v_max - v_min) + v_min
 
@@ -485,7 +524,7 @@ if "result" in st.session_state and "context" in st.session_state:
         st.pyplot(fig2)
         plt.close()
 
-    # ── Tabla resumen ──────────────────────────────────────────────────────────
+    # Tabla resumen
     st.divider()
     st.subheader("📋 Tabla por tramos")
 

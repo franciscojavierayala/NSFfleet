@@ -6,13 +6,6 @@ Ejecutar con:
     python main.py                      # modo sintético (por defecto)
     python main.py --mode real          # modo datos reales
     python main.py --mode real --data data/mis_viajes.parquet
-
-Pasos:
-  1. Carga dataset (sintético o real)
-  2. Entrena el cVAE
-  3. Predice una ruta nueva con intervalos de confianza
-  4. Filtra anomalías sobre viajes entrantes
-  5. Muestra visualización de los resultados
 """
 
 import argparse
@@ -21,44 +14,55 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from dataclasses import dataclass, field
 from pathlib import Path
 from data.synthetic import MINS, MAXS
 
 
-# ── Configuración ─────────────────────────────────────────────────────────────
-CFG = {
-    # Modo de datos: "synthetic" | "real"
-    "data_mode":    "synthetic",
+@dataclass
+class Config:
+    """Configuración del sistema. Inmutable después de construcción."""
+    # Modo de datos
+    data_mode: str = "synthetic"
 
-    # Rutas de datos reales (solo se usan si data_mode = "real")
-    "real_train_path": "data/trips_train.parquet",
-    "real_val_path":   None,                        # None = split automático 80/20
-    "scaler_path":     "checkpoints/scaler.json",
+    # Rutas de datos reales (solo si data_mode = "real")
+    real_train_path: str = "data/trips_train.parquet"
+    real_val_path: str | None = None        # None = split automático 80/20
+    scaler_path: str = "checkpoints/scaler.json"
 
-    # Entrenamiento sintético
-    "n_trips":       4000,
-    "batch_size":    64,
-    "epochs":        100,
-    "lr":            1e-4,
-    "warmup_epochs": 25,
-    "latent_dim":    64,
-    "n_samples":     100,
-    "checkpoint_dir": "checkpoints",
-    "seed":          42,
-}
+    # Entrenamiento
+    n_trips: int = 4_000
+    batch_size: int = 64
+    epochs: int = 100
+    lr: float = 1e-4
+    n_samples: int = 100
+    checkpoint_dir: str = "checkpoints"
+    seed: int = 42
 
-torch.manual_seed(CFG["seed"])
-np.random.seed(CFG["seed"])
+
+def _build_config(args: argparse.Namespace) -> Config:
+    """Construye la config a partir de los argumentos de CLI."""
+    return Config(
+        data_mode=args.mode,
+        real_train_path=args.data or "data/trips_train.parquet",
+        epochs=args.epochs if args.epochs else 100,
+    )
+
+
+def _set_seeds(seed: int) -> None:
+    """Fija las semillas globales de reproducibilidad."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
 
 # ── 1. DATOS ──────────────────────────────────────────────────────────────────
-def step_data(data_mode: str = "synthetic"):
+def step_data(cfg: Config):
     print("=" * 60)
-    if data_mode == "real":
+    if cfg.data_mode == "real":
         print("PASO 1 — Cargando dataset REAL de telemetría...")
         print("=" * 60)
 
-        train_path = Path(CFG["real_train_path"])
+        train_path = Path(cfg.real_train_path)
         if not train_path.exists():
             print(f"\n⚠️  Archivo no encontrado: {train_path}")
             print("   Opciones:")
@@ -66,15 +70,16 @@ def step_data(data_mode: str = "synthetic"):
             print("   2. Usa --data <ruta_a_tu_archivo>")
             print("   3. Ejecuta sin --mode real para usar datos sintéticos")
             print("\n   Cambiando a modo sintético automáticamente...\n")
-            return step_data("synthetic")
+            # Fallback: devolver datos sintéticos sin recursión sobre cfg
+            return step_data(Config(data_mode="synthetic", seed=cfg.seed))
 
         from data.real_dataset import get_real_dataloaders
         train_loader, val_loader = get_real_dataloaders(
             train_path=str(train_path),
-            val_path=CFG["real_val_path"],
-            scaler_path=CFG["scaler_path"],
-            batch_size=CFG["batch_size"],
-            seed=CFG["seed"],
+            val_path=cfg.real_val_path,
+            scaler_path=cfg.scaler_path,
+            batch_size=cfg.batch_size,
+            seed=cfg.seed,
         )
         print(f"  Train: {len(train_loader.dataset)} ventanas")
         print(f"  Val:   {len(val_loader.dataset)} ventanas\n")
@@ -85,9 +90,9 @@ def step_data(data_mode: str = "synthetic"):
         print("=" * 60)
         from data.synthetic import get_dataloaders
         train_loader, val_loader = get_dataloaders(
-            n_trips=CFG["n_trips"],
-            batch_size=CFG["batch_size"],
-            seed=CFG["seed"],
+            n_trips=cfg.n_trips,
+            batch_size=cfg.batch_size,
+            seed=cfg.seed,
         )
         print(f"  Train: {len(train_loader.dataset)} viajes")
         print(f"  Val:   {len(val_loader.dataset)} viajes\n")
@@ -95,60 +100,55 @@ def step_data(data_mode: str = "synthetic"):
 
 
 # ── 2. ENTRENAMIENTO ──────────────────────────────────────────────────────────
-def step_train(train_loader, val_loader, data_mode: str = "synthetic"):
+def step_train(train_loader, val_loader, cfg: Config, data_mode: str = "synthetic"):
     print("=" * 60)
     print(f"PASO 2 — Entrenando ConditionalFlowModel (NSF)  [modo: {data_mode}]")
     print("=" * 60)
- 
-    # MIGRACIÓN: ConditionalVAE → ConditionalFlowModel
-    # El Trainer ya no recibe warmup_epochs (los flujos no necesitan KL annealing)
+
     from model.nflow_model import ConditionalFlowModel
     from train.trainer import Trainer
- 
-    epochs = CFG["epochs"] if data_mode == "synthetic" else max(CFG["epochs"], 50)
- 
-    model = ConditionalFlowModel()   # hiperparámetros por defecto optimizados para CPU
+
+    epochs = cfg.epochs if data_mode == "synthetic" else max(cfg.epochs, 50)
+
+    model = ConditionalFlowModel()
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        lr=CFG["lr"],
-        checkpoint_dir=CFG["checkpoint_dir"],
+        lr=cfg.lr,
+        checkpoint_dir=cfg.checkpoint_dir,
     )
     history = trainer.train(epochs=epochs)
- 
-    # FIX: recargar el mejor checkpoint guardado en disco.
-    # Tras trainer.train(), el modelo ya se recarga internamente, pero recargamos
-    # explícitamente aquí para garantizar consistencia con la lógica de app.py.
-    best_path = Path(CFG["checkpoint_dir"]) / "best_model.pt"
+
+    best_path = Path(cfg.checkpoint_dir) / "best_model.pt"
     if best_path.exists():
-        ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(best_path, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"\n  ✓ Mejor modelo recargado desde: {best_path}")
         print(f"    best_val_nll  : {trainer.best_val_nll:.4f}")
         print(f"    best_val_loss : {trainer.best_val_loss:.4f}")
     else:
         print("\n  ⚠️  No se encontró best_model.pt — usando pesos de la última época.")
- 
+
     # Guardar metadatos del entrenamiento
-    meta_path = Path(CFG["checkpoint_dir"]) / "training_meta.json"
+    meta_path = Path(cfg.checkpoint_dir) / "training_meta.json"
     meta = {
-        "data_mode":    data_mode,
-        "model_type":   "ConditionalFlowModel",
-        "epochs":       epochs,
-        "n_train":      len(train_loader.dataset),
-        "n_val":        len(val_loader.dataset),
-        "best_val_nll": trainer.best_val_nll,
+        "data_mode":     data_mode,
+        "model_type":    "ConditionalFlowModel",
+        "epochs":        epochs,
+        "n_train":       len(train_loader.dataset),
+        "n_val":         len(val_loader.dataset),
+        "best_val_nll":  trainer.best_val_nll,
         "best_val_loss": trainer.best_val_loss,
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
- 
+
     return model, trainer, history
 
 
 # ── 3. INFERENCIA — RUTA NUEVA ────────────────────────────────────────────────
-def step_inference(model):
+def step_inference(model, cfg: Config):
     print("\n" + "=" * 60)
     print("PASO 3 — Predicción de ruta nueva")
     print("=" * 60)
@@ -164,7 +164,7 @@ def step_inference(model):
         load_pct=0.75,
         vehicle_type=0,
         day_of_week=1,
-        n_samples=CFG["n_samples"],
+        n_samples=cfg.n_samples,
     )
     predictor.print_report(result)
     return result, predictor
@@ -179,7 +179,6 @@ def step_anomaly_filter(train_loader, data_mode: str = "synthetic"):
     from anomaly.filter import AnomalyFilter
     from data.synthetic import generate_trip
 
-    # Pool de referencia: primeros 500 viajes del train
     pool = [trip.numpy() for trip, _ in train_loader.dataset][:500]
 
     contamination = 0.03 if data_mode == "real" else 0.05
@@ -205,7 +204,7 @@ def step_anomaly_filter(train_loader, data_mode: str = "synthetic"):
             )
             incoming.append(trip)
 
-    # 2 viajes anómalos (siempre simulados para poder controlarlos)
+    # Viajes anómalos controlados
     bad_trip_1 = generate_trip()
     bad_trip_1[:, 1] = -0.9   # consumo negativo → sensor roto
     incoming.append(bad_trip_1)
@@ -225,11 +224,10 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     print("=" * 60)
 
     fig = plt.figure(figsize=(16, 10))
-    title = f"NSFfleet — Demo  [datos: {data_mode}]"
-    fig.suptitle(title, fontsize=14, fontweight="bold")
+    fig.suptitle(f"NSFfleet — Demo  [datos: {data_mode}]", fontsize=14, fontweight="bold")
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
 
-    # Curvas de entrenamiento
+    # Curvas de reconstrucción
     ax1 = fig.add_subplot(gs[0, 0])
     epochs_range = range(1, len(history["train_loss"]) + 1)
     ax1.plot(epochs_range, history["train_recon"], label="Train recon", color="#1F5C99")
@@ -240,7 +238,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     ax1.legend()
     ax1.grid(alpha=0.3)
 
-    # NLL del flujo 
+    # NLL del flujo
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.plot(epochs_range, history["train_nll"], label="Train NLL", color="#2CA02C")
     ax2.plot(epochs_range, history["val_nll"],   label="Val NLL",   color="#9467BD",
@@ -249,7 +247,6 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
     ax2.set_xlabel("Época")
     ax2.legend(fontsize=8)
     ax2.grid(alpha=0.3)
-
 
     # Distribución de consumo
     ax3 = fig.add_subplot(gs[0, 2])
@@ -286,7 +283,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
 
     # Consumo P50 por tramo
     ax5 = fig.add_subplot(gs[1, 2])
-    segs = sorted(result["segments"], key=lambda x: x["tramo"])
+    segs  = sorted(result["segments"], key=lambda x: x["tramo"])
     tramos = [f"T{s['tramo']}" for s in segs]
     p50s   = [s["consumo"]["p50"] for s in segs]
     p5s    = [s["consumo"]["p5"]  for s in segs]
@@ -310,7 +307,7 @@ def step_visualize(result, history, data_mode: str = "synthetic"):
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="NSFfleet — Demo")
     parser.add_argument(
         "--mode", choices=["synthetic", "real"], default="synthetic",
@@ -326,33 +323,24 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Aplicar argumentos
-    CFG["data_mode"] = args.mode
-    if args.data:
-        CFG["real_train_path"] = args.data
-    if args.epochs:
-        CFG["epochs"] = args.epochs
+    cfg = _build_config(args)
+    _set_seeds(cfg.seed)
 
     print(f"\n{'='*60}")
-    print(f"  NSFfleet  —  modo: {CFG['data_mode'].upper()}")
+    print(f"  NSFfleet  —  modo: {cfg.data_mode.upper()}")
     print(f"{'='*60}\n")
 
-    # 1. Datos
-    train_loader, val_loader, data_mode = step_data(CFG["data_mode"])
-
-    # 2. Entrenar y recargar el mejor checkpoint
-    model, trainer, history = step_train(train_loader, val_loader, data_mode)
-
-    # 3. Inferencia sobre ruta nueva (usa el mejor modelo, no el de la última época)
-    result, predictor = step_inference(model)
-
-    # 4. Filtro de anomalías
+    train_loader, val_loader, data_mode = step_data(cfg)
+    model, trainer, history = step_train(train_loader, val_loader, cfg, data_mode)
+    result, predictor = step_inference(model, cfg)
     valid_trips, discarded, af = step_anomaly_filter(train_loader, data_mode)
-
-    # 5. Visualizar
     step_visualize(result, history, data_mode)
 
     print(f"\n✓ Demo completada  [modo: {data_mode}]")
     print(f"  Checkpoint : checkpoints/best_model.pt")
     print(f"  Metadatos  : checkpoints/training_meta.json")
     print(f"  Gráfico    : outputs/demo_results_{data_mode}.png\n")
+
+
+if __name__ == "__main__":
+    main()
