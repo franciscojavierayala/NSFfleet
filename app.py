@@ -106,7 +106,7 @@ def _fetch_nominatim(query):
     resp = _requests.get(
         "https://nominatim.openstreetmap.org/search",
         params={"q": query, "format": "json", "limit": 7, "addressdetails": 1, "accept-language": "es"},
-        headers={"User-Agent": "nsffleet_demo/1.0"},
+        headers={"User-Agent": "cnsffleet_demo/1.0"},
         timeout=4,
     )
     resp.raise_for_status()
@@ -259,7 +259,6 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 
 /* ── Inputs ── */
-[data-testid="stSidebar"] .stSelectbox > div > div,
 [data-testid="stSidebar"] .stDateInput > div > div > input {
     background: var(--surface2) !important;
     border: 1px solid var(--border2) !important;
@@ -274,7 +273,10 @@ html, body, [data-testid="stAppViewContainer"] {
     box-shadow: 0 0 8px rgba(245,166,35,0.5) !important;
 }
 [data-testid="stSidebar"] .stSlider [role="slider"] { background: var(--amber) !important; }
-
+[data-testid="stSidebar"] .stDateInput input {
+    border: 1px solid #eef0f6 !important;
+    color: var(--text) !important;
+}
 /* ── Searchbox ── */
 .stSearchbox input {
     background: var(--surface2) !important;
@@ -451,7 +453,7 @@ def load_model():
 st.markdown("""
 <div class="hero">
     <div class="hero-badge">⬡ Neural Spline Flow · Probabilistic</div>
-    <div class="hero-title">NSF<span>fleet</span></div>
+    <div class="hero-title">cNSF<span>fleet</span></div>
     <p class="hero-sub">Predictor probabilístico de consumo para transporte pesado.
     Intervalos P5/P50/P95 por tramo usando física real, meteorología en vivo y rutas OSRM.</p>
 </div>
@@ -522,8 +524,11 @@ with col_btn:
 
 # ── Execution ─────────────────────────────────────────────────────────────────
 if predict_btn and origin and destination:
-    st.session_state.pop("result", None)
-    st.session_state.pop("context", None)
+    if origin.strip().lower() == destination.strip().lower():
+        st.error("⚠️ El origen y el destino no pueden ser iguales. Por favor, selecciona ciudades distintas.")
+    else:
+        st.session_state.pop("result", None)
+        st.session_state.pop("context", None)
 
     with st.status("Calculando ruta...", expanded=True) as status_box:
         st.write("🗺️ Geocodificando origen y destino...")
@@ -770,8 +775,6 @@ if "result" in st.session_state and "context" in st.session_state:
         for i in range(min(8, len(trips_v))):
             ax2.plot(t, trips_v[i], alpha=0.13, linewidth=0.6, color="#8892a8")
 
-        # IC 90% relleno
-        ax2.fill_between(t, p5, p95, alpha=0.18, color=BLUE, label="IC 90%")
 
         # Percentiles P5 / P95 como líneas punteadas
         ax2.plot(t, p5,  color=BLUE,  linewidth=1.0, linestyle="--", alpha=0.7, label="P05 / P95")

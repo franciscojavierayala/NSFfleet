@@ -16,7 +16,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 
 
-NOMINATIM_UA = "cvae_fleet_demo/1.0"
+NOMINATIM_UA = "cnsffleet_demo/1.0"
 
 
 # ── Geocodificación ────────────────────────────────────────────────────────────

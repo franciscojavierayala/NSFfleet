@@ -1,20 +1,9 @@
 """
 train/trainer.py
 Bucle de entrenamiento del ConditionalFlowModel (NSF) con early stopping.
-
-Cambios respecto al trainer original del cVAE:
-  ELIMINADO:
-    - kl_weight_schedule() — los flujos no tienen KL ni necesitan annealing
-    - cvae_loss()           — sustituida por model.training_loss()
-    - métricas train_kl / val_kl / kl_weight en el historial
-    - checkpoint basado en val_recon → ahora en val_nll
-
-  AÑADIDO:
     - Pérdida NLL + reconstrucción a través de ConditionalFlowModel.training_loss()
     - Métricas train_nll / val_nll / train_recon / val_recon
     - Checkpoint guardado cuando val_nll mejora (análogo al val_recon anterior)
-
-  SIN CAMBIOS:
     - Formato del checkpoint (clave "model_state_dict") — app.py no requiere cambios
     - Optimizer + ReduceLROnPlateau scheduler
     - Gradient clipping en max_norm=1.0
