@@ -107,6 +107,7 @@ class FleetPredictor:
             )
             c_tensor = torch.tensor(c)
             batch    = self.model.sample(c_tensor, n_samples=per_style)
+            
             all_trips.append(batch.cpu().numpy())
         trips_np = np.concatenate(all_trips, axis=0)  # (n_samples, T, F)
 

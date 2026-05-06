@@ -2,8 +2,8 @@
   "data_mode": "synthetic",
   "model_type": "ConditionalFlowModel",
   "epochs": 100,
-  "n_train": 3200,
-  "n_val": 800,
-  "best_val_nll": -105.86215444711539,
-  "best_val_loss": -105.759888282189
+  "n_train": 4800,
+  "n_val": 1200,
+  "best_val_nll": -113.36543755782277,
+  "best_val_loss": -119.31679695530941
 }

@@ -31,7 +31,7 @@ class Config:
     scaler_path: str = "checkpoints/scaler.json"
 
     # Entrenamiento
-    n_trips: int = 4_000
+    n_trips: int = 6_000
     batch_size: int = 64
     epochs: int = 100
     lr: float = 1e-4
@@ -170,57 +170,10 @@ def step_inference(model, cfg: Config):
     return result, predictor
 
 
-# ── 4. FILTRO DE ANOMALÍAS ────────────────────────────────────────────────────
-def step_anomaly_filter(train_loader, data_mode: str = "synthetic"):
-    print("=" * 60)
-    print("PASO 4 — Filtro de anomalías")
-    print("=" * 60)
-
-    from anomaly.filter import AnomalyFilter
-    from data.synthetic import generate_trip
-
-    pool = [trip.numpy() for trip, _ in train_loader.dataset][:500]
-
-    contamination = 0.03 if data_mode == "real" else 0.05
-    af = AnomalyFilter(contamination=contamination)
-    af.fit(pool)
-
-    print(f"\n  Modo: {data_mode} — contamination={contamination}")
-    print("  Evaluando viajes entrantes simulados...")
-
-    incoming = []
-
-    if data_mode == "real":
-        for trip, _ in train_loader.dataset:
-            incoming.append(trip.numpy())
-            if len(incoming) >= 8:
-                break
-    else:
-        for _ in range(8):
-            trip = generate_trip(
-                avg_slope=np.random.uniform(-3, 3),
-                avg_temp=np.random.uniform(5, 20),
-                load_pct=np.random.uniform(0.5, 0.9),
-            )
-            incoming.append(trip)
-
-    # Viajes anómalos controlados
-    bad_trip_1 = generate_trip()
-    bad_trip_1[:, 1] = -0.9   # consumo negativo → sensor roto
-    incoming.append(bad_trip_1)
-
-    bad_trip_2 = generate_trip()
-    bad_trip_2[:, 0] = 0.99   # velocidad máxima sostenida → error GPS
-    incoming.append(bad_trip_2)
-
-    valid_trips, discarded = af.filter_batch(incoming, verbose=True)
-    return valid_trips, discarded, af
-
-
-# ── 5. VISUALIZACIÓN ──────────────────────────────────────────────────────────
+# ── 4. VISUALIZACIÓN ──────────────────────────────────────────────────────────
 def step_visualize(result, history, data_mode: str = "synthetic"):
     print("\n" + "=" * 60)
-    print("PASO 5 — Generando visualización...")
+    print("PASO 4 — Generando visualización...")
     print("=" * 60)
 
     fig = plt.figure(figsize=(16, 10))
@@ -333,7 +286,6 @@ def main() -> None:
     train_loader, val_loader, data_mode = step_data(cfg)
     model, trainer, history = step_train(train_loader, val_loader, cfg, data_mode)
     result, predictor = step_inference(model, cfg)
-    valid_trips, discarded, af = step_anomaly_filter(train_loader, data_mode)
     step_visualize(result, history, data_mode)
 
     print(f"\n✓ Demo completada  [modo: {data_mode}]")

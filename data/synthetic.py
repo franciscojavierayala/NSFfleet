@@ -238,16 +238,16 @@ def _speed_profile(T, p, slope, driving_style, rng):
             # Penalización de velocidad proporcional a la pendiente.
             # Para slope=6: grade_penalty = 6*5 + (6-3)*4 = 30+12 = 42 km/h
             # → v_c ≈ 83*0.93 - 42 ≈ 35 km/h (físicamente correcto en subida 6%)
-            grade_penalty = abs(sl_mean) * 5.0 + max(0, abs(sl_mean) - 3) * 4.0
-            v_c = v_max * rng.uniform(0.88, 0.98) - grade_penalty
+            grade_penalty = abs(sl_mean) * 2.5 + max(0, abs(sl_mean) - 4) * 2.0
+            v_c = v_max * rng.uniform(0.92, 1.00) - grade_penalty
             # Suelo: 40% de v_max (~36 km/h) — permite velocidades bajas en montaña.
             # NOTA: la línea antigua "max(v_c, v_max * 0.70)" ha sido eliminada
             # porque sobreescribía la penalización y causaba consumos de 120 l/100km.
-            v_c = max(v_c, v_max * 0.40)
+            v_c = max(v_c, v_max * 0.55)
 
             seg = np.clip(
-                v_c + rng.standard_normal(slen) * 3.0 * (0.5 + driving_style * 0.5),
-                v_max * 0.35,   # antes 0.65 — reducido para permitir velocidades bajas en pendiente
+                v_c + rng.standard_normal(slen) * 6.0 * (0.5 + driving_style * 0.5),
+                v_max * 0.55,  
                 v_max,
             )
             ramp = np.minimum(np.arange(slen) / 8.0, 1.0)
@@ -406,10 +406,10 @@ class TripDataset(Dataset):
         self.trips, self.conditions = [], []
 
         for _ in range(n_trips):
-            avg_slope     = rng.uniform(-6,  6)
-            avg_temp      = rng.uniform(-15, 38)
-            precipitation = rng.uniform(0,   15)
-            load_pct      = rng.uniform(0.2, 1.0)
+            avg_slope     = rng.uniform(-10, 10)
+            avg_temp      = rng.uniform(-20, 42)
+            precipitation = rng.uniform(0,   25)
+            load_pct      = rng.uniform(0.1, 1.0)
             driving_style = rng.uniform(0,   1)
             vehicle_type  = int(rng.integers(0, 3))
             day_of_week   = int(rng.integers(0, 7))
