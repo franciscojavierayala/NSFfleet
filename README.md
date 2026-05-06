@@ -100,11 +100,6 @@ All APIs are **free and require no API key**.
         ┌───────────▼───────────┐
         │   FleetPredictor      │  10 driving styles × n_samples/10
         │   predictor.py        │  → P5/P50/P95 per segment
-        └───────────┬───────────┘
-                    │
-        ┌───────────▼───────────┐
-        │   IsolationForest     │  Anomaly filtering (filter.py)
-        │   filter.py           │  Removes physically implausible trips
         └───────────────────────┘
 ```
 
@@ -195,10 +190,6 @@ wind_frontal = wind_speed * math.cos(angle_diff)
 
 This component is passed as a conditioning feature to the flow, allowing the model to distinguish a 90 km/h route into a 30 km/h headwind from the same route with a tailwind.
 
-### Why Isolation Forest for anomaly filtering?
-
-The physics engine occasionally generates trips that are physically valid at each time step but globally implausible (e.g. sustained 130 km/h on a 6% grade). `IsolationForest` filters these outliers before training, ensuring the flow learns from a clean distribution and does not produce absurd tails at inference.
-
 ---
 
 ## Quick Start
@@ -266,11 +257,8 @@ cNSFfleet/
 │   └── predictor.py            ← FleetPredictor — P5/P50/P95 with driving style diversity
 ├── route/
 │   └── route_builder.py        ← Route → conditioning vector pipeline
-├── anomaly/
-│   └── filter.py               ← Isolation Forest anomaly detection
 └── checkpoints/
     ├── best_model.pt           ← Best checkpoint (selected by val NLL)
-    ├── scaler.json             ← Feature scaler for real data mode
     └── training_meta.json      ← Training run metadata (mode, epochs, best NLL)
 ```
 
@@ -298,9 +286,6 @@ Assembles the route conditioning vector from free-text origin/destination:
 4. Fetches weather forecast via Open-Meteo
 5. Computes route bearing and frontal wind component
 6. Returns a normalised conditioning dict
-
-### `anomaly/filter.py`
-Wraps scikit-learn's `IsolationForest` to filter physically implausible synthetic trips before training. Trips with anomaly score below threshold are discarded.
 
 ### `app.py`
 Streamlit dashboard. City autocomplete via Nominatim. Interactive Folium map with per-segment colour coding. Bar charts with P5/P50/P95 error bars. Speed profile visualisation with synthetic trip overlays. Summary metrics and per-segment table.
@@ -405,7 +390,6 @@ The `real_dataset.py` loader handles resampling to fixed time steps, missing val
 | Language | Python 3.11 |
 | Deep learning | PyTorch 2.x |
 | Normalizing flows | nflows ≥ 0.14 |
-| Anomaly detection | scikit-learn (IsolationForest) |
 | UI | Streamlit |
 | Maps | Folium + streamlit-folium |
 | Routing | OSRM (public instance) |
