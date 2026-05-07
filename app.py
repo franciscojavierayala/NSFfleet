@@ -487,7 +487,32 @@ with st.sidebar:
         "- 🌤️ Open-Meteo — meteorología\n\n"
         "_Todas gratuitas, sin API key._"
     )
+MIN_KM, MAX_KM, MAX_SLOPE, MAX_AVG_SPEED = 10, 900_000, 12, 150
 
+def classify_zone(lat, lon):
+    if lon < -25:                           return "americas"
+    if lat < 35.9 and lon < 32.5:           return "africa"  # Norte/Oeste África
+    if lat < 15 and lon < 51:               return "africa"  # Cuerno de África
+    if lat < -5:                            return "africa"  # África subsahariana
+    return "eurasia"
+
+
+def validate_truck_route(context):
+    d   = context["route_info"]["distance_km"]
+    dur = context["route_info"].get("duration_h", d / 80)
+    s   = context["avg_slope"]
+    h   = context.get("haversine_km", 0)
+    o_z = classify_zone(*context["origin_ll"])
+    d_z = classify_zone(*context["dest_ll"])
+
+    if o_z != d_z:
+        return f"Ruta transcontinental no permitida ({o_z} → {d_z}). Solo se permiten rutas dentro de Europa/Asia."
+    if d < MIN_KM:            return f"Ruta demasiado corta ({d:.0f} km)."
+    if d > MAX_KM:            return f"Distancia ({d:.0f} km) fuera de rango."
+    if s > MAX_SLOPE:         return f"Pendiente media ({s:.1f}%) inviable para un camión."
+    if d/dur > MAX_AVG_SPEED: return f"Velocidad media irreal ({d/dur:.0f} km/h): ruta no terrestre."
+    if h > 0 and d < h*0.5:   return f"Ruta incompleta: OSRM calculó {d:.0f} km pero la distancia real es ~{h:.0f} km."
+    return None
 # ── Model state ───────────────────────────────────────────────────────────────
 model, model_ready = load_model()
 if not model_ready:
@@ -496,31 +521,14 @@ if not model_ready:
 # ── Route form ────────────────────────────────────────────────────────────────
 col_in1, col_in2, col_btn = st.columns([2, 2, 1])
 with col_in1:
-    origin = st_searchbox(
-        search_cities,
-        placeholder="📍 Ciudad de origen...",
-        label="Origen",
-        key="searchbox_origin",
-        debounce=300,
-        clear_on_submit=False,
-    )
+    origin = st_searchbox(search_cities, placeholder="📍 Ciudad de origen...", label="Origen",
+                          key="searchbox_origin", debounce=300, clear_on_submit=False)
 with col_in2:
-    destination = st_searchbox(
-        search_cities,
-        placeholder="🏁 Ciudad de destino...",
-        label="Destino",
-        key="searchbox_destination",
-        debounce=300,
-        clear_on_submit=False,
-    )
+    destination = st_searchbox(search_cities, placeholder="🏁 Ciudad de destino...", label="Destino",
+                               key="searchbox_destination", debounce=300, clear_on_submit=False)
 with col_btn:
     st.write("")
-    predict_btn = st.button(
-        "⚡ Predecir",
-        type="primary",
-        use_container_width=True,
-        disabled=not model_ready,
-    )
+    predict_btn = st.button("⚡ Predecir", type="primary", use_container_width=True, disabled=not model_ready)
 
 # ── Execution ─────────────────────────────────────────────────────────────────
 if predict_btn and origin and destination:
@@ -530,56 +538,60 @@ if predict_btn and origin and destination:
         st.session_state.pop("result", None)
         st.session_state.pop("context", None)
 
-    with st.status("Calculando ruta...", expanded=True) as status_box:
-        st.write("🗺️ Geocodificando origen y destino...")
-        try:
-            context = build_route_context(
-                origin=origin, destination=destination,
-                vehicle_type=vehicle_type, load_pct=load_pct,
-                day_of_week=day_of_week, departure_date=departure_date,
+        with st.status("Calculando ruta...", expanded=True) as status_box:
+            st.write("🗺️ Geocodificando origen y destino...")
+            try:
+                context = build_route_context(
+                    origin=origin, destination=destination,
+                    vehicle_type=vehicle_type, load_pct=load_pct,
+                    day_of_week=day_of_week, departure_date=departure_date,
+                )
+            except _requests.exceptions.Timeout:
+                st.error("⏱️ La API de rutas tardó demasiado. Comprueba tu conexión e inténtalo de nuevo.")
+                st.stop()
+            except _requests.exceptions.ConnectionError:
+                st.error("🌐 No se pudo conectar con OSRM. Verifica tu conexión a Internet.")
+                st.stop()
+            except KeyError as e:
+                st.error(f"⚠️ Campo inesperado en la respuesta: `{e}`. Prueba con un nombre más específico (ej. 'Sevilla, España').")
+                st.stop()
+            except ValueError as e:
+                st.error(f"⚠️ Datos de ruta inválidos: {e}")
+                st.stop()
+
+            err = validate_truck_route(context)
+            if err:
+                st.error(f"🚫 Ruta inválida: {err}")
+                st.stop()
+
+            st.session_state["context"] = context
+
+            wind_speed    = context["weather"].get("wind_speed", 0.0)
+            wind_dir      = context["weather"].get("wind_direction", 0.0)
+            route_bearing = context.get("route_bearing", 0.0)
+            wind_frontal  = frontal_wind(wind_speed, wind_dir, route_bearing)
+            weather_date  = context["weather"].get("date_used", "hoy")
+
+            st.write(f"✅ Ruta: **{context['route_info']['distance_km']:.0f} km**")
+            st.write(f"⛰️ Pendiente media: **{context['avg_slope']:.1f}%**")
+            st.write(f"🌡️ Temperatura: **{context['weather']['temperature']:.1f} °C** _(fecha: {weather_date})_")
+            st.write(f"🌧️ Precipitación: **{context['weather']['precipitation']:.1f} mm/h**")
+            st.write(f"💨 Viento: **{wind_speed:.1f} km/h** dir {wind_dir:.0f}° → componente frontal: **{wind_frontal:+.1f} km/h**")
+            st.write(f"🤖 Generando {N_SAMPLES} viajes sintéticos con el NSF...")
+
+            predictor = FleetPredictor(model)
+            result = predictor.predict_route(
+                avg_slope=context["avg_slope"],
+                avg_temp=context["weather"]["temperature"],
+                precipitation=context["weather"]["precipitation"],
+                load_pct=load_pct,
+                vehicle_type=vehicle_type,
+                day_of_week=day_of_week,
+                n_samples=N_SAMPLES,
+                wind_kmh=wind_frontal,
             )
-        except _requests.exceptions.Timeout:
-            st.error("⏱️ La API de rutas tardó demasiado. Comprueba tu conexión e inténtalo de nuevo.")
-            st.stop()
-        except _requests.exceptions.ConnectionError:
-            st.error("🌐 No se pudo conectar con OSRM. Verifica tu conexión a Internet.")
-            st.stop()
-        except KeyError as e:
-            st.error(f"⚠️ Campo inesperado en la respuesta: `{e}`. Prueba con un nombre más específico (ej. 'Sevilla, España').")
-            st.stop()
-        except ValueError as e:
-            st.error(f"⚠️ Datos de ruta inválidos: {e}")
-            st.stop()
-
-        st.session_state["context"] = context
-
-        wind_speed    = context["weather"].get("wind_speed", 0.0)
-        wind_dir      = context["weather"].get("wind_direction", 0.0)
-        route_bearing = context.get("route_bearing", 0.0)
-        wind_frontal  = frontal_wind(wind_speed, wind_dir, route_bearing)
-        weather_date  = context["weather"].get("date_used", "hoy")
-
-        st.write(f"✅ Ruta: **{context['route_info']['distance_km']:.0f} km**")
-        st.write(f"⛰️ Pendiente media: **{context['avg_slope']:.1f}%**")
-        st.write(f"🌡️ Temperatura: **{context['weather']['temperature']:.1f} °C** _(fecha: {weather_date})_")
-        st.write(f"🌧️ Precipitación: **{context['weather']['precipitation']:.1f} mm/h**")
-        st.write(f"💨 Viento: **{wind_speed:.1f} km/h** dir {wind_dir:.0f}° → componente frontal: **{wind_frontal:+.1f} km/h**")
-        st.write(f"🤖 Generando {N_SAMPLES} viajes sintéticos con el NSF...")
-
-        predictor = FleetPredictor(model)
-        result = predictor.predict_route(
-            avg_slope=context["avg_slope"],
-            avg_temp=context["weather"]["temperature"],
-            precipitation=context["weather"]["precipitation"],
-            load_pct=load_pct,
-            vehicle_type=vehicle_type,
-            day_of_week=day_of_week,
-            n_samples=N_SAMPLES,
-            wind_kmh=wind_frontal,
-        )
-        st.session_state["result"] = result
-        status_box.update(label="✅ Predicción completada", state="complete")
-
+            st.session_state["result"] = result
+            status_box.update(label="✅ Predicción completada", state="complete")
 # ── Results ───────────────────────────────────────────────────────────────────
 if "result" in st.session_state and "context" in st.session_state:
     result  = st.session_state["result"]

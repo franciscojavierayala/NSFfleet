@@ -48,6 +48,8 @@ def get_route(origin_latlon: tuple, dest_latlon: tuple) -> dict:
     )
 
     resp = requests.get(url, timeout=20)
+    if resp.status_code == 400:
+        raise ValueError("OSRM no pudo calcular la ruta. ¿Origen y destino en continentes distintos o sin carretera entre ellos?")
     resp.raise_for_status()
     data = resp.json()
 
@@ -281,7 +283,12 @@ def compute_route_bearing(origin_ll: tuple, dest_ll: tuple) -> float:
     bearing = math.degrees(math.atan2(x, y))
     return (bearing + 360) % 360  # normalizar a [0, 360]
 
-
+def haversine_km(ll1, ll2):
+    R = 6371
+    lat1, lon1, lat2, lon2 = map(math.radians, [ll1[0], ll1[1], ll2[0], ll2[1]])
+    dlat, dlon = lat2-lat1, lon2-lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
 # ── Pipeline completo ─────────────────────────────────────────────────────────
 def build_route_context(
     origin: str,
@@ -290,6 +297,7 @@ def build_route_context(
     load_pct: float = 0.7,
     day_of_week: int = 0,
     departure_date=None,
+    
 ) -> dict:
     """
     Pipeline completo: nombre de ciudad → vector de condicionamiento c.
@@ -346,4 +354,5 @@ def build_route_context(
         "origin_ll":        origin_ll,
         "dest_ll":          dest_ll,
         "route_bearing":    route_bearing,
+        "haversine_km":     haversine_km(origin_ll, dest_ll),
     }
