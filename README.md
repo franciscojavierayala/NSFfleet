@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/logo.png" alt="cNSFfleet" width="120"/>
-
 # cNSFfleet
 
 **Predictor probabilístico de consumo de combustible para transporte pesado**
@@ -498,7 +496,6 @@ MIT — consulta [LICENSE](LICENSE) para los detalles.
 
 <div align="center">
 
-*Desarrollado como Proyecto Intermodular del ciclo de Inteligencia Artificial y Big Data · 2024–2025*
 
 **Fco Javier Ayala Parejo**
 
